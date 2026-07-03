@@ -105,10 +105,22 @@
 
   // scan.json is read back by GET /api/scan and the frontend: write via
   // temp-file + rename so a concurrent read never sees a half-written file.
+  // The counter makes the temp path unique even for same-millisecond writes —
+  // Date.now() alone let two concurrent writes share (and corrupt) one temp file.
+  let tmpSeq = 0;
   async function writeFileAtomic(file, data) {
-    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+    const tmp = `${file}.tmp-${process.pid}-${++tmpSeq}`;
     await fsp.writeFile(tmp, data);
     await fsp.rename(tmp, file);
+  }
+
+  // All scan.json read-modify-write cycles go through this chain so an
+  // automate never interleaves with a rescan's final write (lost updates).
+  let scanJsonLock = Promise.resolve();
+  function withScanJsonLock(fn) {
+    const run = scanJsonLock.then(fn, fn);
+    scanJsonLock = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   // ---- scan orchestration (single-flight) ----------------------------------
@@ -141,7 +153,21 @@
       const runScan = await loadScanner();
       const opts = roots ? { roots } : {};
       const scan = await runScan(opts, (p) => { progress = p; });
-      await writeFileAtomic(SCAN_PATH, JSON.stringify(scan, null, 2));
+      await withScanJsonLock(async () => {
+        // Finding ids hash their evidence paths, so an unchanged finding keeps
+        // its id across rescans — carry its briefed status forward instead of
+        // silently reverting it (and orphaning the playbook on disk).
+        try {
+          const prev = JSON.parse(await fsp.readFile(SCAN_PATH, 'utf8'));
+          const kept = new Map((prev.findings || [])
+            .filter((f) => f.automation && f.automation.status && f.automation.status !== 'idle')
+            .map((f) => [f.id, f.automation]));
+          for (const f of scan.findings) {
+            if (kept.has(f.id)) f.automation = kept.get(f.id);
+          }
+        } catch (e) { /* no previous scan or unreadable — nothing to carry */ }
+        await writeFileAtomic(SCAN_PATH, JSON.stringify(scan, null, 2));
+      });
       progress = Object.assign({}, progress, { phase: 'done' });
     } catch (err) {
       console.error(`scan failed: ${err && err.stack ? err.stack : err}`);
@@ -250,34 +276,36 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
       return sendJSON(res, 400, { error: 'findingId required' });
     }
 
-    let scan;
-    try {
-      scan = JSON.parse(await fsp.readFile(SCAN_PATH, 'utf8'));
-    } catch (err) {
-      if (err.code === 'ENOENT') return sendJSON(res, 404, { error: 'no scan yet' });
-      return sendJSON(res, 500, { error: 'scan.json is unreadable' });
-    }
+    const result = await withScanJsonLock(async () => {
+      let scan;
+      try {
+        scan = JSON.parse(await fsp.readFile(SCAN_PATH, 'utf8'));
+      } catch (err) {
+        if (err.code === 'ENOENT') return { status: 404, body: { error: 'no scan yet' } };
+        return { status: 500, body: { error: 'scan.json is unreadable' } };
+      }
 
-    const finding = (scan.findings || []).find((f) => f.id === findingId);
-    if (!finding) return sendJSON(res, 404, { error: 'unknown finding id' });
-    // finding.id becomes a directory name — refuse anything path-shaped.
-    if (!SAFE_ID.test(finding.id)) {
-      return sendJSON(res, 400, { error: 'finding id contains unsafe characters' });
-    }
+      const finding = (scan.findings || []).find((f) => f.id === findingId);
+      if (!finding) return { status: 404, body: { error: 'unknown finding id' } };
+      // finding.id becomes a directory name — refuse anything path-shaped.
+      if (!SAFE_ID.test(finding.id)) {
+        return { status: 400, body: { error: 'finding id contains unsafe characters' } };
+      }
 
-    const playbookDir = path.join(PLAYBOOKS_DIR, finding.id);
-    await fsp.mkdir(playbookDir, { recursive: true });
-    const brief = renderBrief(finding, scan, playbookDir);
-    const briefPath = path.join(playbookDir, 'BRIEF.md');
-    await fsp.writeFile(briefPath, brief);
-    await writePlaybookSettings(playbookDir);
+      const playbookDir = path.join(PLAYBOOKS_DIR, finding.id);
+      await fsp.mkdir(playbookDir, { recursive: true });
+      const brief = renderBrief(finding, scan, playbookDir);
+      const briefPath = path.join(playbookDir, 'BRIEF.md');
+      await fsp.writeFile(briefPath, brief);
+      await writePlaybookSettings(playbookDir);
 
-    finding.automation = finding.automation || {};
-    finding.automation.status = 'briefed';
-    finding.automation.briefPath = briefPath;
-    await writeFileAtomic(SCAN_PATH, JSON.stringify(scan, null, 2));
-
-    sendJSON(res, 200, { brief, briefPath });
+      finding.automation = finding.automation || {};
+      finding.automation.status = 'briefed';
+      finding.automation.briefPath = briefPath;
+      await writeFileAtomic(SCAN_PATH, JSON.stringify(scan, null, 2));
+      return { status: 200, body: { brief, briefPath } };
+    });
+    sendJSON(res, result.status, result.body);
   }
 
   async function apiGetBrief(req, res, u) {

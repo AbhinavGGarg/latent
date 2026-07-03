@@ -468,22 +468,77 @@ function CountUp({ to, dur, play }) {
   return <React.Fragment>{v.toFixed(1)}</React.Fragment>;
 }
 
+/* Dialog stack + body scroll lock. Escape closes only the topmost dialog, and the
+   lock is reference-counted so stacked dialogs never leave the page unscrollable. */
+const MODAL_STACK = [];
+let bodyLockCount = 0;
+let bodyPrevOverflow = '';
+function lockBody() {
+  if (bodyLockCount === 0) {
+    bodyPrevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+  }
+  bodyLockCount++;
+}
+function unlockBody() {
+  bodyLockCount = Math.max(0, bodyLockCount - 1);
+  if (bodyLockCount === 0) document.body.style.overflow = bodyPrevOverflow;
+}
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), ' +
+  'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 function Modal({ title, onClose, children, footer }) {
   const closeRef = useRef(null);
+  const panelRef = useRef(null);
+  const pressedOnOverlay = useRef(false);
+  // Track the latest onClose in a ref so the mount effect never re-runs
+  // (callers pass inline arrows whose identity changes every render).
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => {
+    const opener = document.activeElement;
+    const entry = {};
+    MODAL_STACK.push(entry);
+    lockBody();
     if (closeRef.current) closeRef.current.focus();
-    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    const onKey = e => {
+      if (MODAL_STACK[MODAL_STACK.length - 1] !== entry) return; // only the topmost dialog reacts
+      if (e.key === 'Escape') { onCloseRef.current(); return; }
+      if (e.key === 'Tab' && panelRef.current) {
+        // Trap Tab inside the dialog; pull focus back in if it ever escapes.
+        const items = panelRef.current.querySelectorAll(FOCUSABLE);
+        if (!items.length) { e.preventDefault(); return; }
+        const first = items[0], last = items[items.length - 1];
+        const inside = panelRef.current.contains(document.activeElement);
+        if (e.shiftKey) {
+          if (!inside || document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else if (!inside || document.activeElement === last) {
+          e.preventDefault(); first.focus();
+        }
+      }
+    };
     document.addEventListener('keydown', onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
+      unlockBody();
+      const i = MODAL_STACK.indexOf(entry);
+      if (i !== -1) MODAL_STACK.splice(i, 1);
+      if (opener && typeof opener.focus === 'function' && document.contains(opener)) opener.focus();
     };
-  }, [onClose]);
+  }, []);
   return (
-    <div className="overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className="overlay"
+      onMouseDown={e => { pressedOnOverlay.current = e.target === e.currentTarget; }}
+      onMouseUp={e => {
+        // Close only when the press started AND ended on the backdrop — a
+        // text-selection drag released on the overlay must not dismiss the dialog.
+        if (pressedOnOverlay.current && e.target === e.currentTarget) onCloseRef.current();
+        pressedOnOverlay.current = false;
+      }}
+    >
+      <div ref={panelRef} className="modal" role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head">
           <div className="modal-title">{title}</div>
           <button ref={closeRef} className="modal-close" aria-label="Close" onClick={onClose}>×</button>
@@ -561,6 +616,12 @@ function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, o
             <button className="btn-text" onClick={() => onAutomate(finding)}>Retry</button>
           </span>
         ) : null}
+        {autoState.briefError ? (
+          <span className="card-error">
+            The brief could not load — {autoState.briefError}. Check that `node server.js` is running, then{' '}
+            <button className="btn-text" onClick={() => onViewBrief(finding)}>retry</button>.
+          </span>
+        ) : null}
       </div>
     </article>
   );
@@ -629,6 +690,9 @@ function App() {
 
   const startScan = useCallback(async () => {
     setErrMsg('');
+    // A rescan invalidates any open dialog — never re-open a stale one over a fresh report.
+    setBriefModal(null);
+    setShareOpen(false);
     try {
       const r = await fetchJSON('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       if (r.status === 202 || r.status === 409) {
@@ -712,8 +776,18 @@ function App() {
     const st = autoMap[finding.id] || {};
     let brief = st.brief;
     if (!brief) {
-      const r = await fetchJSON('/api/brief?id=' + encodeURIComponent(finding.id));
+      let r;
+      try {
+        r = await fetchJSON('/api/brief?id=' + encodeURIComponent(finding.id));
+      } catch (e) {
+        setAutoMap(m => ({
+          ...m,
+          [finding.id]: { ...(m[finding.id] || {}), briefError: e.message || 'the local server did not respond' },
+        }));
+        return;
+      }
       brief = (r.ok && r.body && r.body.brief) || 'The brief could not be loaded. Draft it again.';
+      setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), briefError: null } }));
     }
     const briefPath = st.briefPath || (finding.automation && finding.automation.briefPath) || ('playbooks/' + finding.id + '/BRIEF.md');
     const dir = String(briefPath).replace(/\/?BRIEF\.md$/, '');
@@ -793,6 +867,13 @@ function App() {
           <h1 className="state-title">The read failed.</h1>
           <p className="state-body">{errMsg || 'Something went wrong talking to the local server.'}</p>
           <button className="btn btn-primary" onClick={startScan}>Retry</button>
+          {hasLast && scan ? (
+            <div className="idle-last">
+              <button className="btn-text" onClick={() => { setFreshReport(false); setPhase('report'); }}>
+                View the last read
+              </button>
+            </div>
+          ) : null}
         </main>
       </div>
     );

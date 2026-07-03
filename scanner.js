@@ -35,8 +35,22 @@ const EXCLUDE_DIRS = new Set([
 
 // Machine noise is never evidence of human work: caches (GPUCache,
 // DawnWebGPUCache, ...) and macOS .app bundle internals stay out of the index.
-function isExcludedDir(name) {
-  return EXCLUDE_DIRS.has(name) || /cache/i.test(name) || name.endsWith('.app');
+// Exact names only — a project named "apicache" or "CacheKit" is real work.
+const CACHE_DIR_NAMES = new Set([
+  'cache', 'caches', 'cachedata', 'cachestorage', 'code cache', 'gpucache',
+  'shadercache', 'grshadercache', 'dawnwebgpucache', 'dawngraphitecache',
+  'graphitedawncache', 'component_crx_cache', 'cachedextensions', 'script cache',
+]);
+
+function isExcludedDir(name, fullPath) {
+  if (EXCLUDE_DIRS.has(name)) return true;
+  if (CACHE_DIR_NAMES.has(name.toLowerCase())) return true;
+  if (name.endsWith('.app')) {
+    // Real .app bundles have a Contents dir; a project folder named "my.app" doesn't.
+    try { return fs.lstatSync(path.join(fullPath, 'Contents')).isDirectory(); }
+    catch (e) { return false; }
+  }
+  return false;
 }
 
 const SOURCE_EXTS = new Set(['.js', '.ts', '.py', '.go', '.rs', '.tsx']);
@@ -235,7 +249,7 @@ function walk(roots, stats, emit) {
       const p = path.join(dir, name);
       if (ent.isSymbolicLink()) continue; // never follow symlinks
       if (ent.isDirectory()) {
-        if (isExcludedDir(name)) continue;
+        if (isExcludedDir(name, p)) continue;
         if (depth + 1 <= MAX_DEPTH) stack.push({ dir: p, depth: depth + 1, root });
       } else if (ent.isFile()) {
         let st;
@@ -417,24 +431,29 @@ const CAMERA_RE = /^(img|dsc|dscf|pxl|mvi|gopr|gx\d|whatsapp image|signal-|photo
 
 function detectVersionChains(ctx) {
   const groups = new Map();
+  const bases = new Map(); // token-less originals: "report.md" belongs to the "report v2.md" chain
   for (const f of ctx.files) {
     if (ctx.claimed.has(f.path)) continue; // already explained as a dated/csv series
     if (f.ext === '' || MEDIA_EXTS.has(f.ext)) continue;
     if (CAMERA_RE.test(f.base) || SCREENSHOT_RE.test(f.base)) continue;
-    const key = stripVersionTokens(f.base.slice(0, f.base.length - f.ext.length));
+    const nameNoExt = f.base.slice(0, f.base.length - f.ext.length);
+    const key = stripVersionTokens(nameNoExt);
     if (key.length < 2 || !/[a-z]/.test(key)) continue;
-    if (key === f.base.slice(0, f.base.length - f.ext.length).toLowerCase()) {
-      // nothing was stripped and no trailing digits — can't be a version variant
-      continue;
-    }
+    // Compare against the separator-normalized name, not the raw one:
+    // "meeting-notes" → "meeting notes" is normalization, not a version token.
+    // Only a genuinely stripped token makes a file a version variant.
+    const norm = nameNoExt.toLowerCase().replace(/[-_. ]+/g, ' ').trim();
     const gk = f.dir + ' ' + key + ' ' + f.ext;
+    if (key === norm) { bases.set(gk, f); continue; } // no token: chain-base candidate
     let g = groups.get(gk);
     if (!g) { g = { key, files: [] }; groups.set(gk, g); }
     g.files.push(f);
   }
 
   const findings = [];
-  for (const g of groups.values()) {
+  for (const [gk, g] of groups) {
+    const base = bases.get(gk);
+    if (base && !ctx.claimed.has(base.path)) g.files.push(base); // "report.md" joins {report v1.md, report v2.md}
     if (g.files.length < 3) continue;
     const chain = oldestFirst(g.files);
     for (const f of chain) ctx.claimed.add(f.path);
@@ -632,9 +651,11 @@ function repoCodeStats(ctx, repo) {
   const files = ctx.repoFiles.get(repo) || [];
   let src = 0, tests = 0, newest = 0;
   for (const f of files) {
-    const test = isTestFile(f, repo);
-    if (test) { tests++; continue; }
-    if (SOURCE_EXTS.has(f.ext)) { src++; if (f.mtime > newest) newest = f.mtime; }
+    // Only source files count as either src or tests — otherwise a SPEC.md or
+    // test_data.csv silently satisfies "has tests" and suppresses the finding.
+    if (!SOURCE_EXTS.has(f.ext)) continue;
+    if (isTestFile(f, repo)) { tests++; continue; }
+    src++; if (f.mtime > newest) newest = f.mtime;
   }
   return { src, tests, newest: newest || Date.now() };
 }
@@ -668,11 +689,14 @@ function detectUndocumentedRepos(ctx) {
     const { src, newest } = repoCodeStats(ctx, repo);
     if (src < 1) continue; // "repos with code"
     const rootFiles = ctx.byDir.get(repo) || [];
-    const readme = rootFiles.find((f) => /^readme(\.|$)/i.test(f.base));
-    if (readme && readme.size >= 300) continue;
+    // Judge the best readme present, not the first one readdir happens to
+    // return — an 80-byte readme.txt stub must not mask a real README.md.
+    const readmes = rootFiles.filter((f) => /^readme(\.|$)/i.test(f.base));
+    const best = readmes.reduce((a, b) => (!a || b.size > a.size ? b : a), null);
+    if (best && best.size >= 300) continue;
     hits.push({
       repo, src, newest,
-      detail: readme ? `README is ${readme.size} bytes` : 'no README',
+      detail: best ? `README is ${best.size} bytes` : 'no README',
     });
   }
   if (!hits.length) return [];
@@ -708,9 +732,9 @@ function screenshotLocations(ctx) {
 function detectScreenshotPileup(ctx) {
   const findings = [];
   for (const loc of screenshotLocations(ctx)) {
-    const shots = ctx.files.filter(
-      (f) => (f.dir === loc || f.dir.startsWith(loc + path.sep)) && SCREENSHOT_RE.test(f.base)
-    );
+    // Top level only: screenshots the user already filed into subfolders are
+    // exactly the behavior this detector rewards, not a pileup.
+    const shots = ctx.files.filter((f) => f.dir === loc && SCREENSHOT_RE.test(f.base));
     if (shots.length < 15) continue;
     const n = shots.length;
     const spanWeeks = spanWeeksOf(shots);
