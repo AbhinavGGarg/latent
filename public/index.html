@@ -415,7 +415,6 @@ const REDUCED_MOTION = window.matchMedia &&
 
 const MAX_RECEIPTS = 12;              // SPEC: cap displayed findings at 12
 const POLL_MS = 400;                  // SPEC: poll /api/progress at 400ms, only while scanning
-const GITHUB_URL = 'https://github.com/AbhinavGGarg/latent';
 const CONSENT_KEY = 'latentConsent';  // {roots:[abs paths], consentedAt: ISO}
 
 /* Consent persistence: scans only ever start through the consent panel; rescans
@@ -753,7 +752,6 @@ function Landing({ hasLast, onRead, onViewLast }) {
       <section className="hero">
         <div className="hero-top">
           <span className="wordmark">Latent</span>
-          <a className="mono-link" href={GITHUB_URL} target="_blank" rel="noopener">GitHub ↗</a>
         </div>
         <div className="hero-grid">
           <div>
@@ -813,8 +811,6 @@ function Landing({ hasLast, onRead, onViewLast }) {
       <footer className="land-footer">
         <div className="land-footer-inner">
           <span>Latent — advice is slop; receipts and a button are not.</span>
-          <span aria-hidden="true">·</span>
-          <a className="mono-link" href={GITHUB_URL} target="_blank" rel="noopener">GitHub ↗</a>
           <span aria-hidden="true">·</span>
           <span>MIT license</span>
           <span aria-hidden="true">·</span>
