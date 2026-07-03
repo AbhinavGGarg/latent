@@ -1,0 +1,391 @@
+{
+  "generatedAt": "2026-07-03T21:40:19.787Z",
+  "roots": [
+    "/Users/sam/Documents",
+    "/Users/sam/Downloads"
+  ],
+  "stats": {
+    "files": 110,
+    "dirs": 12,
+    "repos": 1,
+    "textFilesSampled": 8,
+    "durationMs": 36,
+    "skipped": 0
+  },
+  "score": {
+    "value": 74,
+    "recoverableHoursPerWeek": 2.9,
+    "methodology": "score = clamp(round(100 - 9*hours), 4, 96); hours = sum of per-finding estimates, each capped; formulas in ESTIMATES table"
+  },
+  "findings": [
+    {
+      "id": "dated-recurrence:1abefb70",
+      "detector": "dated-recurrence",
+      "title": "You produce the same file on a schedule",
+      "summary": "You have written 6 dated instances of \"weekly-status-{date}.md\" in /Users/sam/Documents/reports, one every ~7 days. Each new one starts from the last, by hand.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/reports/weekly-status-2026-06-22.md",
+          "detail": "6 dated files, one every ~7 days",
+          "mtime": "2026-06-28T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/reports/weekly-status-2026-06-15.md",
+          "detail": "earlier instance",
+          "mtime": "2026-06-21T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/reports/weekly-status-2026-06-08.md",
+          "detail": "earlier instance",
+          "mtime": "2026-06-14T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/reports/weekly-status-2026-06-01.md",
+          "detail": "earlier instance",
+          "mtime": "2026-06-07T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/reports/weekly-status-2026-05-25.md",
+          "detail": "earlier instance",
+          "mtime": "2026-05-31T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/reports/weekly-status-2026-05-18.md",
+          "detail": "earlier instance",
+          "mtime": "2026-05-24T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 6,
+        "estMinutesPerInstance": 45,
+        "estHoursPerWeek": 0.75,
+        "confidence": 0.9,
+        "oneShot": false
+      },
+      "automation": {
+        "kind": "recurring-draft",
+        "title": "Recurring draft agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "version-chains:393425e8",
+      "detector": "version-chains",
+      "title": "You version files by hand",
+      "summary": "You kept 10 hand-made copies of \"module.js\" in /Users/sam/Documents/side-project/src, saved one at a time over 1 week.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/side-project/src/module9.js",
+          "detail": "10 versions, module0.js \u2192 module9.js",
+          "mtime": "2026-06-24T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/side-project/src/module0.js",
+          "detail": "version 1 of 10",
+          "mtime": "2026-06-24T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/side-project/src/module1.js",
+          "detail": "version 2 of 10",
+          "mtime": "2026-06-24T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/side-project/src/module2.js",
+          "detail": "version 3 of 10",
+          "mtime": "2026-06-24T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/side-project/src/module3.js",
+          "detail": "version 4 of 10",
+          "mtime": "2026-06-24T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/side-project/src/module4.js",
+          "detail": "version 5 of 10",
+          "mtime": "2026-06-24T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 10,
+        "estMinutesPerInstance": 4,
+        "estHoursPerWeek": 0.6,
+        "confidence": 0.85,
+        "oneShot": false
+      },
+      "automation": {
+        "kind": "recurring-draft",
+        "title": "Recurring draft agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "near-duplicate-text:de37bab8",
+      "detector": "near-duplicate-text",
+      "title": "You rewrite nearly identical documents",
+      "summary": "3 files under /Users/sam/Documents share at least 70% of their text. You are re-typing a template instead of generating from one.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/outreach/intro-alex.md",
+          "detail": "3 files share \u226570% of their text",
+          "mtime": "2026-06-21T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/outreach/intro-casey.md",
+          "detail": "0.7 KB near-duplicate",
+          "mtime": "2026-06-21T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/outreach/intro-jordan.md",
+          "detail": "0.7 KB near-duplicate",
+          "mtime": "2026-06-21T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 3,
+        "estMinutesPerInstance": 12,
+        "estHoursPerWeek": 0.4,
+        "confidence": 0.8,
+        "oneShot": false
+      },
+      "automation": {
+        "kind": "template-extractor",
+        "title": "Template extractor",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "untested-repos:b06bf6b0",
+      "detector": "untested-repos",
+      "title": "Your repos have no tests",
+      "summary": "1 repo with 10 source files contain zero test files. Every change is verified by hand, or not at all.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/side-project",
+          "detail": "10 source files, 0 tests",
+          "mtime": "2026-06-24T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 1,
+        "estMinutesPerInstance": 150,
+        "estHoursPerWeek": 0.31,
+        "confidence": 0.75,
+        "oneShot": true
+      },
+      "automation": {
+        "kind": "test-writer",
+        "title": "Test writer agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "downloads-entropy:652f7e91",
+      "detector": "downloads-entropy",
+      "title": "Loose files pile up in Downloads",
+      "summary": "74 files sit loose at the top level of /Users/sam/Downloads. Finding anything means scanning the pile by eye.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Downloads",
+          "detail": "74 loose files at the top level",
+          "mtime": "2026-07-03T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Downloads/asset-pack-000.tmp",
+          "detail": "0 KB",
+          "mtime": "2026-07-03T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Downloads/asset-pack-050.tmp",
+          "detail": "0 KB",
+          "mtime": "2026-07-03T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Downloads/asset-pack-001.tmp",
+          "detail": "0 KB",
+          "mtime": "2026-07-02T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Downloads/asset-pack-051.tmp",
+          "detail": "0 KB",
+          "mtime": "2026-07-02T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 74,
+        "estMinutesPerInstance": 15,
+        "estHoursPerWeek": 0.31,
+        "confidence": 0.85,
+        "oneShot": false
+      },
+      "automation": {
+        "kind": "file-organizer",
+        "title": "File organizer agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "scaffold-repetition:666e6e2f",
+      "detector": "scaffold-repetition",
+      "title": "You scaffold the same project by hand",
+      "summary": "3 project folders start from the same fileset (index.html + package.json). You rebuild that skeleton each time instead of generating it.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/gym-site",
+          "detail": "starter fileset: index.html + package.json",
+          "mtime": "2026-06-13T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/florist-site",
+          "detail": "starter fileset: index.html + package.json",
+          "mtime": "2026-06-13T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/bakery-site",
+          "detail": "starter fileset: index.html + package.json",
+          "mtime": "2026-06-13T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 3,
+        "estMinutesPerInstance": 35,
+        "estHoursPerWeek": 0.22,
+        "confidence": 0.65,
+        "oneShot": false
+      },
+      "automation": {
+        "kind": "scaffold-skill",
+        "title": "Scaffold skill",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "version-chains:61900624",
+      "detector": "version-chains",
+      "title": "You version files by hand",
+      "summary": "You kept 6 hand-made copies of \"proposal.md\" in /Users/sam/Documents/clients/acme, saved one at a time over 3 weeks.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/clients/acme/proposal_v6.md",
+          "detail": "6 versions, proposal_v1.md \u2192 proposal_v6.md",
+          "mtime": "2026-06-27T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/clients/acme/proposal_v1.md",
+          "detail": "version 1 of 6",
+          "mtime": "2026-06-07T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/clients/acme/proposal_v2.md",
+          "detail": "version 2 of 6",
+          "mtime": "2026-06-11T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/clients/acme/proposal_v3.md",
+          "detail": "version 3 of 6",
+          "mtime": "2026-06-15T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/clients/acme/proposal_v4.md",
+          "detail": "version 4 of 6",
+          "mtime": "2026-06-19T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/clients/acme/proposal_v5.md",
+          "detail": "version 5 of 6",
+          "mtime": "2026-06-23T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 6,
+        "estMinutesPerInstance": 4,
+        "estHoursPerWeek": 0.12,
+        "confidence": 0.85,
+        "oneShot": false
+      },
+      "automation": {
+        "kind": "recurring-draft",
+        "title": "Recurring draft agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "csv-report-assembly:67541313",
+      "detector": "csv-report-assembly",
+      "title": "You assemble the same CSV report by hand",
+      "summary": "5 CSV files in /Users/sam/Documents/invoices share an identical header row. Each one is the same table rebuilt manually.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/invoices/invoice-2026-06.csv",
+          "detail": "5 CSVs share the header \"invoice_id,client,description,hours,rate,amount,date\"",
+          "mtime": "2026-06-13T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/invoices/invoice-2026-05.csv",
+          "detail": "same header row",
+          "mtime": "2026-05-14T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/invoices/invoice-2026-04.csv",
+          "detail": "same header row",
+          "mtime": "2026-04-14T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/invoices/invoice-2026-03.csv",
+          "detail": "same header row",
+          "mtime": "2026-03-15T21:40:19.615Z"
+        },
+        {
+          "path": "/Users/sam/Documents/invoices/invoice-2026-02.csv",
+          "detail": "same header row",
+          "mtime": "2026-02-13T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 5,
+        "estMinutesPerInstance": 25,
+        "estHoursPerWeek": 0.1,
+        "confidence": 0.8,
+        "oneShot": false
+      },
+      "automation": {
+        "kind": "report-assembler",
+        "title": "Report assembler agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "undocumented-repos:b06bf6b0",
+      "detector": "undocumented-repos",
+      "title": "Your repos ship without a README",
+      "summary": "1 repo with code have no usable README. Anyone opening them starts from zero, including you in six months.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/side-project",
+          "detail": "10 source files, no README",
+          "mtime": "2026-06-24T21:40:19.615Z"
+        }
+      ],
+      "metrics": {
+        "count": 1,
+        "estMinutesPerInstance": 40,
+        "estHoursPerWeek": 0.08,
+        "confidence": 0.7,
+        "oneShot": true
+      },
+      "automation": {
+        "kind": "doc-writer",
+        "title": "README writer agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    }
+  ]
+}

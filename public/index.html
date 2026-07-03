@@ -92,6 +92,16 @@ button { font: inherit; color: inherit; }
 }
 .btn-text:hover { text-decoration-color: var(--ash); }
 
+/* demo marker — quiet, never heat/glacier */
+.chip-demo {
+  display: inline-flex; align-items: center;
+  font: 500 11px var(--font-mono); letter-spacing: 0.08em;
+  color: var(--ash); border: 1px solid var(--seam);
+  border-radius: 999px; padding: 4px 11px; white-space: nowrap;
+}
+.hero-stats .chip-demo { margin-left: 12px; }
+.demo-install { user-select: all; }
+
 /* cold = handled. The only glacier in the building. */
 .chip-cold {
   display: inline-flex; align-items: center; gap: 8px;
@@ -416,6 +426,8 @@ const REDUCED_MOTION = window.matchMedia &&
 const MAX_RECEIPTS = 12;              // SPEC: cap displayed findings at 12
 const POLL_MS = 400;                  // SPEC: poll /api/progress at 400ms, only while scanning
 const CONSENT_KEY = 'latentConsent';  // {roots:[abs paths], consentedAt: ISO}
+/* Static-host demo (Vercel): no local server -> sample data + run-it-locally CTA. */
+const DEMO_INSTALL = 'npx github:AbhinavGGarg/latent';
 
 /* Consent persistence: scans only ever start through the consent panel; rescans
    reuse this stored scope without re-prompting. "View the last read" never needs it. */
@@ -746,7 +758,7 @@ const TRUST_NEVER = [
   'phones home — there is no server to phone',
 ];
 
-function Landing({ hasLast, onRead, onViewLast }) {
+function Landing({ hasLast, onRead, onViewLast, demo }) {
   return (
     <div>
       <section className="hero">
@@ -768,7 +780,10 @@ function Landing({ hasLast, onRead, onViewLast }) {
                 ? <button className="btn btn-ghost" onClick={onViewLast}>View the last read</button>
                 : null}
             </div>
-            <div className="hero-stats">10 detectors · 0 network calls · nothing leaves this machine</div>
+            <div className="hero-stats">
+              11 detectors · 0 network calls · nothing leaves this machine
+              {demo ? <span className="chip-demo">DEMO — sample data</span> : null}
+            </div>
           </div>
           <SpecimenReceipt />
         </div>
@@ -1021,6 +1036,9 @@ function App() {
   const [briefModal, setBriefModal] = useState(null);  // {title, brief, runLine}
   const [shareOpen, setShareOpen] = useState(false);
   const [freshReport, setFreshReport] = useState(false); // stagger cards only after a reveal
+  const [demoMode, setDemoMode] = useState(false);       // static host: sample data, no scanning
+  const [demoModal, setDemoModal] = useState(false);     // the run-it-locally explainer
+  const demoRevealSeen = useRef(false);
   const [consentOpen, setConsentOpen] = useState(false); // the gate: every scan starts here
   const [scanRoots, setScanRoots] = useState([]);        // display strings for the scanning sub-line
   const scanStartedAt = useRef(0);
@@ -1050,20 +1068,37 @@ function App() {
   }, []);
 
   // Mount: resume an in-flight scan, else quietly load the cached one for idle.
+  // If there is no local server at all (static demo host) or ?demo=1, fall back
+  // to sample data — the site stays a working showroom instead of erroring.
   useEffect(() => {
     let dead = false;
     (async () => {
+      const wantDemo = /[?&]demo=1(&|$)/.test(window.location.search);
+      if (!wantDemo) {
+        try {
+          const pr = await fetchJSON('/api/progress');
+          if (dead) return;
+          if (pr.ok && pr.body && pr.body.running) {
+            const c = loadConsent(); // resumed mid-scan: best-known scope for the sub-line
+            if (c) setScanRoots(c.roots.map(homeToTilde));
+            setPhase('scanning');
+            return;
+          }
+          if (pr.ok) {
+            // A live local server — real mode, even before any scan exists.
+            const r = await fetchJSON('/api/scan');
+            if (!dead && r.ok && r.body) { setScan(r.body); seedAutoMap(r.body); setHasLast(true); }
+            return;
+          }
+        } catch (e) { /* network-level failure: no server — try the demo below */ }
+      }
       try {
-        const pr = await fetchJSON('/api/progress');
-        if (!dead && pr.ok && pr.body && pr.body.running) {
-          const c = loadConsent(); // resumed mid-scan: best-known scope for the sub-line
-          if (c) setScanRoots(c.roots.map(homeToTilde));
-          setPhase('scanning');
-          return;
+        const d = await fetchJSON('/demo-scan.json');
+        if (!dead && d.ok && d.body && Array.isArray(d.body.findings)) {
+          setDemoMode(true);
+          setScan(d.body); seedAutoMap(d.body); setHasLast(true);
         }
-        const r = await fetchJSON('/api/scan');
-        if (!dead && r.ok && r.body) { setScan(r.body); seedAutoMap(r.body); setHasLast(true); }
-      } catch (e) { /* no server yet — idle still renders */ }
+      } catch (e) { /* nothing to demo — plain idle */ }
     })();
     return () => { dead = true; };
   }, [seedAutoMap]);
@@ -1117,10 +1152,11 @@ function App() {
 
   /* Rescan: consent-reuse. Same stored roots, no re-prompt; ask only if none stored. */
   const rescan = useCallback(() => {
+    if (demoMode) { setDemoModal(true); return; } // demo can't scan anything
     const c = loadConsent();
     if (c) startScan(c.roots);
     else setConsentOpen(true);
-  }, [startScan]);
+  }, [startScan, demoMode]);
 
   /* Error retry: prefer the exact roots of the failed attempt, then stored consent. */
   const retry = useCallback(() => {
@@ -1175,6 +1211,7 @@ function App() {
   }, [phase, finishScan]);
 
   const automate = useCallback(async finding => {
+    if (demoMode) { setDemoModal(true); return; } // sample data has no briefs to draft
     setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), status: 'drafting', error: null } }));
     try {
       const r = await fetchJSON('/api/automate', {
@@ -1190,7 +1227,7 @@ function App() {
     } catch (e) {
       setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), status: 'error', error: e.message } }));
     }
-  }, []);
+  }, [demoMode]);
 
   const viewBrief = useCallback(async finding => {
     const st = autoMap[finding.id] || {};
@@ -1246,15 +1283,49 @@ function App() {
     />
   ) : null;
 
+  // Demo explainer: shown whenever a demo visitor tries to scan/draft anything.
+  const viewSample = () => {
+    setDemoModal(false);
+    if (!demoRevealSeen.current && !REDUCED_MOTION && scan && scan.findings && scan.findings.length) {
+      demoRevealSeen.current = true;
+      setFreshReport(true); setPhase('reveal');
+    } else {
+      setFreshReport(false); setPhase('report');
+    }
+  };
+  const demoModalEl = demoModal ? (
+    <Modal
+      title="Latent runs on your machine, not in the cloud"
+      onClose={() => setDemoModal(false)}
+      footer={
+        <React.Fragment>
+          <button className="btn btn-primary" onClick={viewSample}>View the sample report</button>
+          <button className="btn btn-ghost" onClick={() => setDemoModal(false)}>Close</button>
+        </React.Fragment>
+      }
+    >
+      <p className="state-body">
+        This site is a demo with sample data. Latent reads your files locally — so it has to
+        run where your files are. Get your own report:
+      </p>
+      <pre className="brief-pre demo-install">{DEMO_INSTALL}</pre>
+      <p className="state-body">
+        Then open http://localhost:8820. Nothing your machine holds ever leaves it.
+      </p>
+    </Modal>
+  ) : null;
+
   if (phase === 'idle') {
     return (
       <React.Fragment>
         <Landing
           hasLast={hasLast}
-          onRead={() => setConsentOpen(true)}
+          demo={demoMode}
+          onRead={() => (demoMode ? setDemoModal(true) : setConsentOpen(true))}
           onViewLast={() => { setFreshReport(false); setPhase('report'); }}
         />
         {consentModal}
+        {demoModalEl}
       </React.Fragment>
     );
   }
@@ -1299,6 +1370,7 @@ function App() {
           ) : null}
         </main>
         {consentModal}
+        {demoModalEl}
       </div>
     );
   }
@@ -1312,11 +1384,12 @@ function App() {
     <div>
       <header className="topbar">
         <span className="wordmark">Latent</span>
+        {demoMode ? <span className="chip-demo">DEMO — sample data</span> : null}
         <span className="topbar-stat">LEVERAGE {score.value != null ? score.value : '—'}<span className="dim">/100</span></span>
         <span className="topbar-stat"><span className="heat-text">≈{hours} h/wk</span> <span className="dim">by hand, est.</span></span>
         <span className="topbar-spacer"></span>
-        <button className="btn btn-ghost" onClick={rescan}>Rescan</button>
-        <button className="btn btn-ghost" onClick={() => setConsentOpen(true)}>Folders</button>
+        <button className="btn btn-ghost" onClick={rescan}>{demoMode ? 'Read my machine' : 'Rescan'}</button>
+        {!demoMode ? <button className="btn btn-ghost" onClick={() => setConsentOpen(true)}>Folders</button> : null}
         {!empty ? <button className="btn btn-ghost" onClick={() => setShareOpen(true)}>Share card</button> : null}
       </header>
 
@@ -1399,6 +1472,7 @@ function App() {
       ) : null}
 
       {consentModal}
+      {demoModalEl}
     </div>
   );
 }
