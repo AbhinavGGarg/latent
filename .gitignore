@@ -1,0 +1,6 @@
+# Personal scan output — never commit anyone's machine data
+scan.json
+playbooks/
+run.log
+.DS_Store
+node_modules/

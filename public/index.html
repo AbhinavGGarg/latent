@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Latent reads your machine locally and shows, with receipts, the work you keep doing by hand that AI can already do.">
+<title>Latent — read your machine</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="%230E0C0A"/><defs><linearGradient id="h" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="%23FF7A1A"/><stop offset="1" stop-color="%23FF3D5E"/></linearGradient></defs><circle cx="16" cy="16" r="7" fill="url(%23h)"/></svg>'>
+<!-- Type trio per SPEC: Bricolage Grotesque (display) / Archivo (body) / IBM Plex Mono (data). One link. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   LATENT — thermal instrument.
+   Semantic color law (SPEC): the heat ramp (--ember → --magma)
+   may color DATA ONLY — hours, severity bars, scan trace.
+   --glacier may color HANDLED states only (briefed / reclaimed).
+   Everything else is carbon / soot / seam / bone / ash. No
+   decorative accents, anywhere.
+   ============================================================ */
+:root {
+  --carbon: #0E0C0A;   /* bg, warm near-black */
+  --soot:   #1A1512;   /* panels */
+  --seam:   #2A211B;   /* borders */
+  --bone:   #EDE6DC;   /* ink */
+  --ash:    #9C8F80;   /* muted */
+  --ember:  #FF7A1A;   /* heat ramp start — data only */
+  --magma:  #FF3D5E;   /* heat ramp end — data only */
+  --glacier:#7ED7FF;   /* handled/briefed only — never decorative */
+  --heat: linear-gradient(97deg, var(--ember) 8%, var(--magma) 92%);
+  --font-display: 'Bricolage Grotesque', 'Archivo', system-ui, sans-serif;
+  --font-sans: 'Archivo', -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: auto; }
+body {
+  background: var(--carbon);
+  color: var(--bone);
+  font: 400 15px/1.6 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+::selection { background: #3A2C22; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--bone); outline-offset: 2px; border-radius: 4px; }
+
+/* ---------- shared atoms ---------- */
+.mono   { font-family: var(--font-mono); }
+.wordmark {
+  font: 800 13px var(--font-display);
+  letter-spacing: 0.34em;
+  color: var(--bone);
+  text-transform: uppercase;
+  user-select: none;
+}
+.eyebrow {
+  font: 500 11px var(--font-mono);
+  letter-spacing: 0.12em;
+  color: var(--ash);
+  text-transform: uppercase;
+}
+/* heat gradient on TEXT — hours/severity numbers only */
+.heat-text {
+  background: var(--heat);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid transparent; border-radius: 8px;
+  padding: 11px 22px; cursor: pointer; background: none;
+  font: 500 14px var(--font-sans); color: var(--bone);
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+.btn:disabled { opacity: .45; cursor: default; }
+.btn-primary { background: var(--bone); color: var(--carbon); border-color: var(--bone); }
+.btn-primary:hover:not(:disabled) { background: #FFFCF6; }
+.btn-ghost { border-color: var(--seam); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--ash); }
+.btn-text {
+  border: none; background: none; padding: 4px 2px; border-radius: 4px;
+  font: 500 13px var(--font-mono); color: var(--bone);
+  text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: var(--seam); cursor: pointer;
+}
+.btn-text:hover { text-decoration-color: var(--ash); }
+
+/* cold = handled. The only glacier in the building. */
+.chip-cold {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: 500 12px var(--font-mono); letter-spacing: 0.04em;
+  color: var(--glacier); border: 1px solid rgba(126, 215, 255, 0.35);
+  border-radius: 999px; padding: 5px 13px;
+}
+.chip-cold::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--glacier); flex: none;
+}
+
+/* ---------- idle ---------- */
+.brand-corner { position: fixed; top: 26px; left: 30px; z-index: 5; }
+.idle {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center;
+  padding: 96px 24px; gap: 26px;
+  background: radial-gradient(1100px 640px at 50% -8%, #16110E, var(--carbon));
+}
+.idle-line {
+  font: 700 clamp(30px, 4.6vw, 46px)/1.12 var(--font-display);
+  letter-spacing: -0.015em; max-width: 15ch;
+}
+.idle-roots { font: 400 12.5px/1.9 var(--font-mono); color: var(--ash); max-width: 640px; overflow-wrap: anywhere; }
+.idle-last { margin-top: 4px; }
+
+/* ---------- scanning ---------- */
+.scan {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center;
+  padding: 96px 24px 120px; gap: 18px;
+}
+.scan-count {
+  font: 500 clamp(64px, 13vw, 128px)/1 var(--font-mono);
+  font-variant-numeric: tabular-nums; letter-spacing: -0.03em;
+}
+.scan-count-label { font: 500 12px var(--font-mono); letter-spacing: 0.22em; color: var(--ash); text-transform: uppercase; }
+.scan-path {
+  margin-top: 22px; font: 400 12.5px var(--font-mono); color: var(--ash);
+  white-space: nowrap; max-width: min(92vw, 860px);
+}
+/* the trace: scan progress rendered as heat — this is data */
+.trace { position: fixed; left: 0; bottom: 0; width: 100%; height: 3px; background: var(--soot); }
+.trace-fill { height: 100%; background: var(--heat); width: 0; transition: width .4s linear; }
+
+/* ---------- reveal ---------- */
+.reveal {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center;
+  padding: 96px 24px; gap: 22px; cursor: pointer;
+}
+.rv { opacity: 0; }
+.rv.on { animation: fadeUp .55s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.reveal-stats { font: 400 13px var(--font-mono); color: var(--ash); letter-spacing: 0.06em; }
+/* THE NUMBER — the one loud thing on the whole instrument */
+.big-number {
+  font: 800 clamp(96px, 17vw, 140px)/0.95 var(--font-display);
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+}
+.big-number-label {
+  margin-top: 14px; font: 400 12.5px var(--font-mono); color: var(--ash);
+  letter-spacing: 0.08em; max-width: 46ch;
+}
+.stamp {
+  display: inline-block; margin-top: 10px;
+  font: 700 15px var(--font-mono); letter-spacing: 0.16em;
+  color: var(--bone); border: 2px solid var(--bone);
+  border-radius: 6px; padding: 9px 16px;
+}
+.rv-stamp.on { animation: stampIn .26s cubic-bezier(.25,.9,.3,1.1) both; }
+@keyframes stampIn { from { opacity: 0; transform: scale(1.15); } to { opacity: 1; transform: scale(1); } }
+.skip-hint {
+  position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
+  border: none; background: none; cursor: pointer;
+  font: 400 11px var(--font-mono); letter-spacing: 0.14em;
+  color: var(--ash); text-transform: uppercase; padding: 6px 10px;
+}
+
+/* ---------- report ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  padding: 14px 30px; border-bottom: 1px solid var(--seam);
+  background: rgba(14, 12, 10, 0.92);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.topbar-stat { font: 500 12.5px var(--font-mono); letter-spacing: 0.06em; white-space: nowrap; }
+.topbar-stat .dim { color: var(--ash); }
+.topbar-spacer { flex: 1; }
+.topbar .btn { padding: 8px 16px; font-size: 13px; }
+
+.report-main { max-width: 880px; margin: 0 auto; padding: 44px 24px 20px; }
+.report-intro { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 26px; }
+.report-title { font: 700 22px/1.2 var(--font-display); letter-spacing: -0.01em; }
+.report-sub { font: 400 12px var(--font-mono); color: var(--ash); letter-spacing: 0.05em; }
+
+/* receipt card */
+.card {
+  background: var(--soot); border: 1px solid var(--seam); border-radius: 12px;
+  padding: 26px 28px 24px;
+}
+.card + .card { margin-top: 14px; }
+.card.stagger { animation: fadeUp .45s cubic-bezier(.2,.7,.3,1) both; }
+.card-eyebrow-row { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.card-title { font: 700 28px/1.15 var(--font-display); letter-spacing: -0.015em; margin-bottom: 8px; overflow-wrap: anywhere; }
+.card-summary { color: var(--bone); max-width: 62ch; margin-bottom: 16px; overflow-wrap: anywhere; }
+.ev-head { font: 500 11px var(--font-mono); letter-spacing: 0.12em; color: var(--ash); text-transform: uppercase; margin-bottom: 6px; }
+.ev-row { font: 400 12.5px/1.75 var(--font-mono); color: var(--ash); overflow-wrap: anywhere; }
+.ev-row .ev-detail { opacity: 0.8; }
+.ev-more { font: 400 12px var(--font-mono); color: var(--ash); margin-top: 2px; }
+.heat-row { display: flex; align-items: center; gap: 14px; margin: 18px 0 16px; }
+/* severity bar — heat on data */
+.heatbar-track {
+  flex: 1; height: 6px; border-radius: 999px; overflow: hidden;
+  background: var(--carbon); border: 1px solid var(--seam);
+}
+.heatbar-fill { height: 100%; border-radius: 999px; background: var(--heat); }
+.heat-est { font: 500 12.5px var(--font-mono); white-space: nowrap; }
+.card-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.card-error { font: 400 12.5px var(--font-mono); color: var(--ash); }
+
+/* empty / error states */
+.state-card {
+  max-width: 620px; margin: 18vh auto 0; text-align: center; padding: 0 24px;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
+}
+.state-title { font: 700 clamp(24px, 3.4vw, 32px)/1.2 var(--font-display); letter-spacing: -0.01em; }
+.state-body { color: var(--ash); max-width: 46ch; }
+
+/* ---------- modal ---------- */
+.overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(8, 6, 5, 0.72);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.modal {
+  background: var(--soot); border: 1px solid var(--seam); border-radius: 14px;
+  width: 100%; max-width: 760px; max-height: 84vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 16px 22px; border-bottom: 1px solid var(--seam);
+}
+.modal-title { font: 700 16px var(--font-display); letter-spacing: -0.01em; }
+.modal-close {
+  border: 1px solid var(--seam); background: none; border-radius: 8px;
+  width: 32px; height: 32px; cursor: pointer; color: var(--ash);
+  font: 400 16px/1 var(--font-mono); flex: none;
+}
+.modal-close:hover { color: var(--bone); border-color: var(--ash); }
+.modal-body { overflow: auto; padding: 20px 22px; }
+.brief-pre { font: 400 12.5px/1.75 var(--font-mono); white-space: pre-wrap; color: var(--bone); overflow-wrap: anywhere; }
+.modal-foot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 14px 22px; border-top: 1px solid var(--seam);
+}
+.run-line {
+  flex: 1; min-width: 220px; font: 400 12px/1.5 var(--font-mono); color: var(--ash);
+  background: var(--carbon); border: 1px solid var(--seam); border-radius: 8px;
+  padding: 9px 12px; overflow-wrap: anywhere;
+}
+.share-canvas { width: 100%; height: auto; display: block; border: 1px solid var(--seam); border-radius: 8px; background: var(--carbon); }
+
+/* ---------- footer / methodology ---------- */
+.footer {
+  max-width: 880px; margin: 56px auto 0; padding: 26px 24px 48px;
+  border-top: 1px solid var(--seam);
+}
+.method summary {
+  cursor: pointer; list-style: none; display: inline-block;
+  font: 500 11px var(--font-mono); letter-spacing: 0.16em;
+  color: var(--ash); text-transform: uppercase; padding: 4px 0;
+}
+.method summary::-webkit-details-marker { display: none; }
+.method summary::after { content: " +"; }
+.method[open] summary::after { content: " −"; }
+.method-body { margin-top: 14px; font: 400 12px/1.9 var(--font-mono); color: var(--ash); max-width: 74ch; }
+.method-body p { margin-bottom: 10px; }
+.method-body li { margin-left: 18px; }
+.footer-privacy { margin-top: 22px; font: 400 12px var(--font-mono); color: var(--ash); }
+
+@media (max-width: 480px) {
+  .topbar { padding: 12px 16px; gap: 12px; }
+  .card { padding: 20px 18px; }
+  .brand-corner { top: 20px; left: 20px; }
+}
+
+/* Reduced motion: no count-up, no stagger, no choreography (also enforced in JS). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .rv { opacity: 1; } /* fadeUp is keyframe-driven; keep content visible without it */
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<!-- MANDATORY (SPEC): Babel 8 defaults to automatic JSX runtime, which emits imports
+     and breaks non-module scripts. Register a classic-runtime preset and use it. -->
+<script>Babel.registerPreset('react-classic',{presets:[[Babel.availablePresets['react'],{runtime:'classic'}]]});</script>
+<script type="text/babel" data-presets="react-classic">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+/* prefers-reduced-motion: skip count-up, stagger, and the reveal choreography entirely. */
+const REDUCED_MOTION = window.matchMedia &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const MAX_RECEIPTS = 12;              // SPEC: cap displayed findings at 12
+const POLL_MS = 400;                  // SPEC: poll /api/progress at 400ms, only while scanning
+const DEFAULT_ROOTS = ['~/Downloads', '~/Desktop', '~/Documents', 'your code folders'];
+
+/* Per-detector estimate formulas, mirrored from the SPEC/ESTIMATES table for the
+   methodology footer. Honesty is brand: show the math. */
+const DETECTOR_FORMULAS = [
+  ['version-chains',     '(chain length − 1) × 4 min, spread over the chain’s mtime span (min 1 wk) · cap 1.5 h/wk'],
+  ['dated-recurrence',   'instances per week × 45 min (text) or 25 min · cap 3.0 h/wk'],
+  ['near-duplicate-text','(cluster size − 1) × 12 min over span · cap 2.0 h/wk'],
+  ['untested-repos',     '2.5 h one-shot ÷ 8 wk · cap 1.5 h/wk'],
+  ['undocumented-repos', '40 min one-shot ÷ 8 wk · cap 0.5 h/wk'],
+  ['screenshot-pileup',  'file count × 20 s over span · cap 0.3 h/wk'],
+  ['downloads-entropy',  '15 min/wk + 5 min per 100 loose files · cap 0.8 h/wk'],
+  ['commit-drudgery',    'generic-message rate × commits/wk × 2 min · cap 0.5 h/wk'],
+  ['csv-report-assembly','same as dated-recurrence, on CSV series · cap 2.0 h/wk'],
+  ['scaffold-repetition','35 min one-shot ÷ 8 wk · cap 0.7 h/wk'],
+];
+
+/* ---------- helpers ---------- */
+
+/* Middle-truncate, biased to keep the tail (SPEC: keep tail). */
+function truncMid(s, max) {
+  if (!s) return '';
+  if (s.length <= max) return s;
+  const tail = Math.ceil((max - 1) * 0.62);
+  const head = max - 1 - tail;
+  return s.slice(0, head) + '…' + s.slice(s.length - tail);
+}
+
+function homeToTilde(p) {
+  return String(p || '').replace(/^\/(Users|home)\/[^/]+/, '~');
+}
+
+function detectorLabel(d) {
+  return String(d || '').replace(/-/g, ' ').toUpperCase();
+}
+
+/* One-shot findings: label total hours once. Prefer an explicit field if the
+   scanner provides one; otherwise invert the SPEC's "÷ 8wk" amortization. */
+function oneShotHours(m) {
+  if (m && m.estHoursOnce != null) return m.estHoursOnce;
+  return (m && m.estHoursPerWeek || 0) * 8;
+}
+
+function estLabel(f) {
+  const m = f.metrics || {};
+  if (m.oneShot) return '~' + oneShotHours(m).toFixed(1) + ' h once';
+  return '~' + (m.estHoursPerWeek || 0).toFixed(1) + ' h/wk';
+}
+
+async function fetchJSON(url, opts) {
+  const r = await fetch(url, opts);
+  let body = null;
+  try { body = await r.json(); } catch (e) { /* non-JSON body */ }
+  return { ok: r.ok, status: r.status, body };
+}
+
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  // Fallback for non-secure contexts
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
+
+/* ---------- share card (canvas 1200×630 — explicit attrs; replaced element) ---------- */
+function drawShareCard(canvas, scan) {
+  const W = 1200, H = 630;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0E0C0A';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#2A211B';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(28, 28, W - 56, H - 56);
+
+  // wordmark
+  try { ctx.letterSpacing = '9px'; } catch (e) {}
+  ctx.fillStyle = '#EDE6DC';
+  ctx.font = '800 24px "Bricolage Grotesque", "Archivo", sans-serif';
+  ctx.fillText('LATENT', 72, 104);
+  try { ctx.letterSpacing = '0px'; } catch (e) {}
+
+  // THE number — heat gradient, data only
+  const hours = ((scan.score && scan.score.recoverableHoursPerWeek) || 0).toFixed(1);
+  ctx.font = '800 216px "Bricolage Grotesque", "Archivo", sans-serif';
+  const numW = ctx.measureText(hours).width;
+  const grad = ctx.createLinearGradient(72, 0, 72 + Math.max(numW, 10), 0);
+  grad.addColorStop(0, '#FF7A1A');
+  grad.addColorStop(1, '#FF3D5E');
+  ctx.fillStyle = grad;
+  ctx.fillText(hours, 68, 372);
+
+  ctx.fillStyle = '#9C8F80';
+  ctx.font = '400 21px "IBM Plex Mono", monospace';
+  ctx.fillText('hours/week done by hand that AI can already do', 74, 424);
+
+  // bottom row: score · receipts · provenance
+  const receipts = Math.min((scan.findings || []).length, MAX_RECEIPTS);
+  ctx.fillStyle = '#EDE6DC';
+  ctx.font = '500 24px "IBM Plex Mono", monospace';
+  const scoreStr = 'LEVERAGE ' + ((scan.score && scan.score.value) != null ? scan.score.value : '—') + '/100';
+  ctx.fillText(scoreStr, 72, 546);
+  const scoreW = ctx.measureText(scoreStr).width;
+  ctx.fillStyle = '#9C8F80';
+  ctx.fillText(receipts + ' receipt' + (receipts === 1 ? '' : 's'), 72 + scoreW + 44, 546);
+  ctx.textAlign = 'right';
+  ctx.font = '400 17px "IBM Plex Mono", monospace';
+  ctx.fillText('read locally — nothing left the machine', W - 72, 546);
+  ctx.textAlign = 'left';
+}
+
+/* ---------- small components ---------- */
+
+/* Scanning counter: interpolates between polls so the instrument ticks. */
+function TickNumber({ value }) {
+  const [disp, setDisp] = useState(value);
+  const fromRef = useRef(value);
+  useEffect(() => {
+    if (REDUCED_MOTION) { fromRef.current = value; setDisp(value); return; }
+    const from = fromRef.current, to = value;
+    if (from === to) return;
+    let raf;
+    const t0 = performance.now(), dur = 360;
+    const step = t => {
+      const k = Math.min(1, (t - t0) / dur);
+      const v = Math.round(from + (to - from) * k);
+      fromRef.current = v; setDisp(v);
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return <React.Fragment>{disp.toLocaleString()}</React.Fragment>;
+}
+
+/* The signature: hours counting up, ease-out. Reduced motion → final value, instantly. */
+function CountUp({ to, dur, play }) {
+  // Start at 0 (not `to`) so the frame where `play` flips never flashes the final value.
+  const [v, setV] = useState(REDUCED_MOTION ? to : 0);
+  useEffect(() => {
+    if (!play) return;
+    if (REDUCED_MOTION) { setV(to); return; }
+    let raf;
+    const t0 = performance.now();
+    const step = t => {
+      const k = Math.min(1, (t - t0) / dur);
+      setV(to * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [play, to, dur]);
+  return <React.Fragment>{v.toFixed(1)}</React.Fragment>;
+}
+
+function Modal({ title, onClose, children, footer }) {
+  const closeRef = useRef(null);
+  useEffect(() => {
+    if (closeRef.current) closeRef.current.focus();
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+  return (
+    <div className="overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="modal-head">
+          <div className="modal-title">{title}</div>
+          <button ref={closeRef} className="modal-close" aria-label="Close" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">{children}</div>
+        {footer ? <div className="modal-foot">{footer}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function CopyButton({ text, label }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button className="btn btn-ghost" onClick={() => {
+      copyText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1600); });
+    }}>{done ? 'Copied' : label}</button>
+  );
+}
+
+/* ---------- receipt card ---------- */
+function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, onViewBrief }) {
+  const m = finding.metrics || {};
+  const est = m.estHoursPerWeek || 0;
+  const pct = Math.max(4, Math.min(100, (est / (maxEst || 1)) * 100));
+  const evidence = finding.evidence || [];
+  const shown = evidence.slice(0, 4);
+  const status = autoState.status;
+  return (
+    <article
+      className={'card' + (stagger ? ' stagger' : '')}
+      style={stagger ? { animationDelay: (index * 60) + 'ms' } : null}
+    >
+      <div className="card-eyebrow-row">
+        <span className="eyebrow">RECEIPT {String(index + 1).padStart(2, '0')} — {detectorLabel(finding.detector)}</span>
+      </div>
+      <h3 className="card-title">{finding.title}</h3>
+      <p className="card-summary">{finding.summary}</p>
+
+      <div className="ev-head">Evidence · {m.count != null ? m.count + ' instances' : evidence.length + ' files'}</div>
+      <div>
+        {shown.map((ev, i) => (
+          <div className="ev-row" key={i}>
+            <span className="ev-path">{truncMid(homeToTilde(ev.path), 58)}</span>
+            {ev.detail ? <span className="ev-detail"> — {ev.detail}</span> : null}
+          </div>
+        ))}
+        {evidence.length > shown.length
+          ? <div className="ev-more">+ {evidence.length - shown.length} more {evidence.length - shown.length === 1 ? 'file' : 'files'}</div>
+          : null}
+      </div>
+
+      <div className="heat-row">
+        <div className="heatbar-track" role="img"
+             aria-label={'Estimated ' + estLabel(finding).replace('~', 'about ')}>
+          <div className="heatbar-fill" style={{ width: pct + '%' }}></div>
+        </div>
+        <span className="heat-est heat-text">{estLabel(finding)}</span>
+      </div>
+
+      <div className="card-actions">
+        {status === 'briefed' ? (
+          <React.Fragment>
+            <span className="chip-cold">Brief ready</span>
+            <button className="btn-text" onClick={() => onViewBrief(finding)}>View brief</button>
+          </React.Fragment>
+        ) : status === 'drafting' ? (
+          <button className="btn btn-ghost" disabled>Drafting…</button>
+        ) : (
+          <button className="btn btn-ghost" onClick={() => onAutomate(finding)}>Draft the automation</button>
+        )}
+        {status === 'error' ? (
+          <span className="card-error">
+            The draft failed{autoState.error ? ' — ' + autoState.error : ''}.{' '}
+            <button className="btn-text" onClick={() => onAutomate(finding)}>Retry</button>
+          </span>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+/* ---------- app ---------- */
+function App() {
+  // state machine: idle → scanning → reveal → report (+ error)
+  const [phase, setPhase] = useState('idle');
+  const [scan, setScan] = useState(null);
+  const [hasLast, setHasLast] = useState(false);
+  const [errMsg, setErrMsg] = useState('');
+  const [progress, setProgress] = useState({ filesSeen: 0, dirsSeen: 0, currentPath: '', phase: 'walking', running: false });
+  const [autoMap, setAutoMap] = useState({});          // findingId → {status, briefPath, brief, error}
+  const [briefModal, setBriefModal] = useState(null);  // {title, brief, runLine}
+  const [shareOpen, setShareOpen] = useState(false);
+  const [freshReport, setFreshReport] = useState(false); // stagger cards only after a reveal
+  const scanStartedAt = useRef(0);
+  const canvasRef = useRef(null);
+
+  const findings = useMemo(() => {
+    if (!scan || !scan.findings) return [];
+    return scan.findings
+      .slice()
+      .sort((a, b) => ((b.metrics && b.metrics.estHoursPerWeek) || 0) - ((a.metrics && a.metrics.estHoursPerWeek) || 0))
+      .slice(0, MAX_RECEIPTS);
+  }, [scan]);
+  const maxEst = useMemo(
+    () => findings.reduce((m, f) => Math.max(m, (f.metrics && f.metrics.estHoursPerWeek) || 0), 0),
+    [findings]
+  );
+
+  // Seed automation state from a loaded scan (persisted "briefed" statuses).
+  const seedAutoMap = useCallback(s => {
+    const map = {};
+    (s.findings || []).forEach(f => {
+      const a = f.automation || {};
+      map[f.id] = { status: a.status === 'briefed' ? 'briefed' : 'idle', briefPath: a.briefPath || null, brief: null };
+    });
+    setAutoMap(map);
+  }, []);
+
+  // Mount: resume an in-flight scan, else quietly load the cached one for idle.
+  useEffect(() => {
+    let dead = false;
+    (async () => {
+      try {
+        const pr = await fetchJSON('/api/progress');
+        if (!dead && pr.ok && pr.body && pr.body.running) { setPhase('scanning'); return; }
+        const r = await fetchJSON('/api/scan');
+        if (!dead && r.ok && r.body) { setScan(r.body); seedAutoMap(r.body); setHasLast(true); }
+      } catch (e) { /* no server yet — idle still renders */ }
+    })();
+    return () => { dead = true; };
+  }, [seedAutoMap]);
+
+  const finishScan = useCallback(s => {
+    setScan(s); seedAutoMap(s); setHasLast(true);
+    // Reduced motion or an empty read: no choreography, straight to the report.
+    if (REDUCED_MOTION || !s.findings || s.findings.length === 0) {
+      setFreshReport(false); setPhase('report');
+    } else {
+      setPhase('reveal');
+    }
+  }, [seedAutoMap]);
+
+  const startScan = useCallback(async () => {
+    setErrMsg('');
+    try {
+      const r = await fetchJSON('/api/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (r.status === 202 || r.status === 409) {
+        scanStartedAt.current = Date.now();
+        setProgress({ filesSeen: 0, dirsSeen: 0, currentPath: '', phase: 'walking', running: true });
+        setPhase('scanning');
+      } else {
+        throw new Error((r.body && r.body.error) || ('the server answered ' + r.status));
+      }
+    } catch (e) {
+      setErrMsg('The scan could not start — ' + (e.message || 'the local server did not respond') +
+        '. Check that `node server.js` is running on port 8820, then retry.');
+      setPhase('error');
+    }
+  }, []);
+
+  // Poll /api/progress at 400ms — ONLY while scanning (SPEC).
+  useEffect(() => {
+    if (phase !== 'scanning') return;
+    let stop = false, sawRunning = false, idleTicks = 0;
+    const tick = async () => {
+      try {
+        const r = await fetchJSON('/api/progress');
+        if (stop || !r.ok || !r.body) return;
+        const p = r.body;
+        setProgress(p);
+        // The server 202s POST /api/scan and reports failures via progress.
+        if (p.phase === 'error') {
+          stop = true; clearInterval(iv);
+          setErrMsg('The scan failed — ' + (p.error || 'unknown error') + '. Fix that, then retry.');
+          setPhase('error');
+          return;
+        }
+        if (p.running) { sawRunning = true; return; }
+        // Not running: confirm the result is fresh before declaring done
+        // (guards against reading a stale scan.json from a previous run).
+        idleTicks++;
+        const sr = await fetchJSON('/api/scan');
+        if (stop) return;
+        const s = sr.ok ? sr.body : null;
+        const fresh = s && (p.phase === 'done' || sawRunning ||
+          new Date(s.generatedAt).getTime() >= scanStartedAt.current - 5000);
+        if (fresh) { stop = true; clearInterval(iv); finishScan(s); }
+        else if (idleTicks > 25) {
+          stop = true; clearInterval(iv);
+          setErrMsg('The scan never reported progress. Check the server log, then retry.');
+          setPhase('error');
+        }
+      } catch (e) {
+        if (!stop) {
+          stop = true; clearInterval(iv);
+          setErrMsg('Lost the local server mid-scan. Check that `node server.js` is still running, then retry.');
+          setPhase('error');
+        }
+      }
+    };
+    tick();
+    const iv = setInterval(tick, POLL_MS);
+    return () => { stop = true; clearInterval(iv); };
+  }, [phase, finishScan]);
+
+  const automate = useCallback(async finding => {
+    setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), status: 'drafting', error: null } }));
+    try {
+      const r = await fetchJSON('/api/automate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ findingId: finding.id }),
+      });
+      if (!r.ok) throw new Error((r.body && r.body.error) || ('server answered ' + r.status));
+      setAutoMap(m => ({
+        ...m,
+        [finding.id]: { status: 'briefed', briefPath: r.body.briefPath, brief: r.body.brief },
+      }));
+    } catch (e) {
+      setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), status: 'error', error: e.message } }));
+    }
+  }, []);
+
+  const viewBrief = useCallback(async finding => {
+    const st = autoMap[finding.id] || {};
+    let brief = st.brief;
+    if (!brief) {
+      const r = await fetchJSON('/api/brief?id=' + encodeURIComponent(finding.id));
+      brief = (r.ok && r.body && r.body.brief) || 'The brief could not be loaded. Draft it again.';
+    }
+    const briefPath = st.briefPath || (finding.automation && finding.automation.briefPath) || ('playbooks/' + finding.id + '/BRIEF.md');
+    const dir = String(briefPath).replace(/\/?BRIEF\.md$/, '');
+    setBriefModal({
+      title: finding.title,
+      brief,
+      runLine: 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
+    });
+  }, [autoMap]);
+
+  // Share card: draw once fonts are in, so the canvas type matches the page.
+  useEffect(() => {
+    if (!shareOpen || !scan) return;
+    const draw = () => { if (canvasRef.current) drawShareCard(canvasRef.current, scan); };
+    draw();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+  }, [shareOpen, scan]);
+
+  const downloadCard = useCallback(() => {
+    if (!canvasRef.current) return;
+    const a = document.createElement('a');
+    a.download = 'latent-card.png';
+    a.href = canvasRef.current.toDataURL('image/png');
+    a.click();
+  }, []);
+
+  /* ---------- views ---------- */
+
+  const rootsLine = (scan && scan.roots ? scan.roots : DEFAULT_ROOTS)
+    .map(homeToTilde).join('  ·  ');
+
+  if (phase === 'idle') {
+    return (
+      <div>
+        <div className="brand-corner"><span className="wordmark">Latent</span></div>
+        <main className="idle">
+          <h1 className="idle-line">Your machine knows what you should automate.</h1>
+          <div className="idle-roots">{rootsLine}</div>
+          <button className="btn btn-primary" onClick={startScan}>Read my machine</button>
+          {hasLast ? (
+            <div className="idle-last">
+              <button className="btn-text" onClick={() => { setFreshReport(false); setPhase('report'); }}>
+                View the last read
+              </button>
+            </div>
+          ) : null}
+        </main>
+      </div>
+    );
+  }
+
+  if (phase === 'scanning') {
+    const pct = Math.min(100, (progress.filesSeen / 60000) * 100);
+    return (
+      <div>
+        <div className="brand-corner"><span className="wordmark">Latent</span></div>
+        <main className="scan" aria-live="polite">
+          <div className="eyebrow">Reading — {progress.phase || 'walking'}</div>
+          <div className="scan-count"><TickNumber value={progress.filesSeen || 0} /></div>
+          <div className="scan-count-label">files</div>
+          <div className="scan-path">{truncMid(homeToTilde(progress.currentPath) || '—', 76)}</div>
+        </main>
+        <div className="trace" aria-hidden="true"><div className="trace-fill" style={{ width: pct + '%' }}></div></div>
+      </div>
+    );
+  }
+
+  if (phase === 'reveal' && scan) {
+    return <Reveal scan={scan} onDone={() => { setFreshReport(true); setPhase('report'); }} />;
+  }
+
+  if (phase === 'error') {
+    return (
+      <div>
+        <div className="brand-corner"><span className="wordmark">Latent</span></div>
+        <main className="state-card">
+          <h1 className="state-title">The read failed.</h1>
+          <p className="state-body">{errMsg || 'Something went wrong talking to the local server.'}</p>
+          <button className="btn btn-primary" onClick={startScan}>Retry</button>
+        </main>
+      </div>
+    );
+  }
+
+  // ---------- report ----------
+  const score = (scan && scan.score) || {};
+  const hours = (score.recoverableHoursPerWeek || 0).toFixed(1);
+  const empty = findings.length === 0;
+
+  return (
+    <div>
+      <header className="topbar">
+        <span className="wordmark">Latent</span>
+        <span className="topbar-stat">LEVERAGE {score.value != null ? score.value : '—'}<span className="dim">/100</span></span>
+        <span className="topbar-stat"><span className="heat-text">≈{hours} h/wk</span> <span className="dim">by hand, est.</span></span>
+        <span className="topbar-spacer"></span>
+        <button className="btn btn-ghost" onClick={startScan}>Rescan</button>
+        {!empty ? <button className="btn btn-ghost" onClick={() => setShareOpen(true)}>Share card</button> : null}
+      </header>
+
+      {empty ? (
+        <main className="state-card">
+          <h1 className="state-title">Clean read.</h1>
+          <p className="state-body">Either you're already leveraged — or point me at more roots.</p>
+          <button className="btn btn-primary" onClick={startScan}>Rescan</button>
+        </main>
+      ) : (
+        <main className="report-main">
+          <div className="report-intro">
+            <h2 className="report-title">{findings.length} receipt{findings.length === 1 ? '' : 's'}, hottest first</h2>
+            <span className="report-sub">
+              {scan.stats ? scan.stats.files.toLocaleString() + ' files · ' + scan.stats.repos + ' repos · read ' : ''}
+              {scan.generatedAt ? new Date(scan.generatedAt).toLocaleString() : ''}
+            </span>
+          </div>
+          {findings.map((f, i) => (
+            <ReceiptCard
+              key={f.id}
+              finding={f}
+              index={i}
+              maxEst={maxEst}
+              stagger={freshReport && !REDUCED_MOTION}
+              autoState={autoMap[f.id] || { status: 'idle' }}
+              onAutomate={automate}
+              onViewBrief={viewBrief}
+            />
+          ))}
+        </main>
+      )}
+
+      <footer className="footer">
+        <details className="method">
+          <summary>Methodology</summary>
+          <div className="method-body">
+            <p>{score.methodology || 'score = clamp(round(100 − 9 × hours), 4, 96); hours = sum of per-finding estimates, each capped.'}</p>
+            <ul>
+              {DETECTOR_FORMULAS.map(([name, formula]) => (
+                <li key={name}>{name} — {formula}</li>
+              ))}
+            </ul>
+          </div>
+        </details>
+        <p className="footer-privacy">Latent reads your filesystem locally. Nothing leaves this machine.</p>
+      </footer>
+
+      {briefModal ? (
+        <Modal
+          title={briefModal.title}
+          onClose={() => setBriefModal(null)}
+          footer={
+            <React.Fragment>
+              <code className="run-line">{briefModal.runLine}</code>
+              <CopyButton text={briefModal.runLine} label="Copy run command" />
+            </React.Fragment>
+          }
+        >
+          <pre className="brief-pre">{briefModal.brief}</pre>
+        </Modal>
+      ) : null}
+
+      {shareOpen && scan ? (
+        <Modal
+          title="Share card"
+          onClose={() => setShareOpen(false)}
+          footer={
+            <React.Fragment>
+              <span className="report-sub">1200 × 630 PNG, rendered locally.</span>
+              <span className="topbar-spacer"></span>
+              <button className="btn btn-primary" onClick={downloadCard}>Download PNG</button>
+            </React.Fragment>
+          }
+        >
+          {/* SPEC: canvas is a replaced element — explicit width/height attributes required. */}
+          <canvas ref={canvasRef} className="share-canvas" width="1200" height="630"
+                  aria-label="Share card preview"></canvas>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+/* ---------- reveal choreography (~4s, click to skip; never mounted under reduced motion) ---------- */
+function Reveal({ scan, onDone }) {
+  const [step, setStep] = useState(0); // 1: stats · 2: number counts · 3: score stamp
+  useEffect(() => {
+    const timers = [
+      setTimeout(() => setStep(1), 120),
+      setTimeout(() => setStep(2), 750),
+      setTimeout(() => setStep(3), 2750),
+      setTimeout(onDone, 3900),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, [onDone]);
+
+  const stats = scan.stats || {};
+  const score = scan.score || {};
+  const secs = ((stats.durationMs || 0) / 1000).toFixed(1);
+
+  return (
+    <main className="reveal" onClick={onDone}>
+      <div className={'rv reveal-stats' + (step >= 1 ? ' on' : '')}>
+        {(stats.files || 0).toLocaleString()} files · {stats.repos || 0} repos · {secs}s
+      </div>
+      <div className={'rv' + (step >= 2 ? ' on' : '')}>
+        <div className="big-number heat-text" aria-live="polite">
+          <CountUp to={score.recoverableHoursPerWeek || 0} dur={1800} play={step >= 2} />
+        </div>
+        <div className="big-number-label">estimated hours/week you're doing by hand that AI can already do</div>
+      </div>
+      <div className={'rv rv-stamp' + (step >= 3 ? ' on' : '')}>
+        <span className="stamp">LEVERAGE {score.value != null ? score.value : '—'}/100</span>
+      </div>
+      <button className="skip-hint" onClick={onDone}>Click to skip</button>
+    </main>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
