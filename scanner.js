@@ -4,12 +4,14 @@
  * LATENT — scanner.js
  * CLI + module. Pure Node stdlib, no external deps.
  *
- *   node scanner.js [--roots=a,b] [--out=scan.json]
+ *   node scanner.js [--roots=a,b] [--out=scan.json] [--shell]
  *   const { runScan, DETECTORS, ESTIMATES } = require('./scanner');
  *
- * Walks the given roots once, builds a file index, runs 10 detectors over it,
- * and emits the scan object defined in SPEC.md. Every fs touch is wrapped;
- * EPERM/EACCES/ENOENT (and anything else) count into stats.skipped, never throw.
+ * Walks the given roots once, builds a file index, runs the detectors over it
+ * (10 by default; the opt-in shell-history detector runs ONLY when
+ * opts.shellHistory === true / --shell), and emits the scan object defined in
+ * SPEC.md. Every fs touch is wrapped; EPERM/EACCES/ENOENT (and anything else)
+ * count into stats.skipped, never throw.
  */
 
 const fs = require('fs');
@@ -132,6 +134,16 @@ const ESTIMATES = {
     formula: 'one-shot 35 min per project dir, amortized over 8 wk; cap 0.7 h/wk',
     hours: (m) => m.dirCount * (35 / 60) / 8,
   },
+  'shell-ritual': {
+    capHoursPerWeek: 1.5,
+    formula: 'ritual occurrences per week x sequence length x 20 s; cap 1.5 h/wk',
+    hours: (m) => m.perWeek * m.seqLen * 20 / 3600,
+  },
+  'alias-candidate': {
+    capHoursPerWeek: 0.5,
+    formula: 'occurrences per week x 15 s; cap 0.5 h/wk',
+    hours: (m) => m.perWeek * 15 / 3600,
+  },
 };
 
 function round2(x) { return Math.round(x * 100) / 100; }
@@ -166,11 +178,14 @@ function tilde(p, home) {
 function newestFirst(files) { return files.slice().sort((a, b) => b.mtime - a.mtime); }
 function oldestFirst(files) { return files.slice().sort((a, b) => a.mtime - b.mtime); }
 
-// id = <detector>:<8-char fnv1a hex of joined evidence paths>
-function makeFinding(detector, title, summary, evidence, metrics) {
+// id = <detector>:<8-char fnv1a hex of joined evidence paths>. idExtra (optional)
+// joins the hash input for detectors whose findings can share every evidence
+// path (e.g. several shell rituals inside one history file) — ids stay stable
+// across rescans but never collide.
+function makeFinding(detector, title, summary, evidence, metrics, idExtra) {
   const meta = DETECTOR_META[detector];
   return {
-    id: detector + ':' + fnv1aHex(evidence.map((e) => e.path).join('|')),
+    id: detector + ':' + fnv1aHex(evidence.map((e) => e.path).join('|') + (idExtra ? '|' + idExtra : '')),
     detector,
     title,
     summary,
@@ -934,6 +949,279 @@ function detectScaffoldRepetition(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Detector 11 — shell-rituals. OPT-IN ONLY: runs when opts.shellHistory === true
+// (--shell on the CLI); the default scan never opens a history file.
+//
+// PRIVACY IS THE CONTRACT: raw command lines never leave this section. Every
+// command is reduced to a redacted template built from a CLOSED display
+// vocabulary — a KNOWN_HEADS command word + a KNOWN_SUBCOMMANDS subcommand +
+// an arg count, e.g. "git push …(2 args)". Anything else (custom script
+// names, pasted tokens) is anonymized to "[sh:1a2b3c4d]" — names themselves
+// can embed secrets. No paths, no flags, no values, no unknown words, ever.
+// Raw text lives only in local variables.
+// ---------------------------------------------------------------------------
+
+const MAX_HISTORY_ENTRIES = 20000;        // last N entries per history file
+const RITUAL_MIN_COUNT = 8;               // n-gram must recur this often
+const ALIAS_MIN_COUNT = 10;               // long command must recur this often
+const ALIAS_MIN_LENGTH = 40;              // original (normalized) length floor
+
+// Commands whose second token is a meaningful subcommand worth displaying.
+const SUBCOMMAND_HEADS = new Set([
+  'git', 'npm', 'npx', 'pnpm', 'yarn', 'docker', 'kubectl', 'vercel', 'gh',
+  'cargo', 'pip', 'pip3', 'python', 'python3', 'node', 'make', 'brew',
+  'ssh', 'rsync', 'curl',
+]);
+
+// Only names in this closed vocabulary are ever DISPLAYED as the command word.
+// A first token outside it (custom scripts, pasted blobs) is user-controlled
+// text that can embed a secret in its NAME — e.g. ./deploy-<password>.sh — so
+// it is shown as a stable anonymized tag ("[sh:1a2b3c4d]") instead.
+const KNOWN_HEADS = new Set([
+  ...SUBCOMMAND_HEADS,
+  'ls', 'cd', 'cat', 'less', 'more', 'tail', 'head', 'grep', 'rg', 'ag',
+  'find', 'fd', 'mkdir', 'rmdir', 'rm', 'cp', 'mv', 'ln', 'touch', 'chmod',
+  'chown', 'echo', 'printf', 'export', 'set', 'unset', 'source', 'alias',
+  'open', 'code', 'subl', 'vim', 'nvim', 'vi', 'nano', 'emacs', 'man',
+  'which', 'type', 'whoami', 'pwd', 'clear', 'history', 'jobs', 'fg', 'bg',
+  'kill', 'killall', 'ps', 'top', 'htop', 'du', 'df', 'tar', 'zip', 'unzip',
+  'gzip', 'gunzip', 'sed', 'awk', 'cut', 'sort', 'uniq', 'wc', 'tr', 'xargs',
+  'tee', 'env', 'sudo', 'time', 'watch', 'date', 'uname', 'sw_vers',
+  'osascript', 'pbcopy', 'pbpaste', 'say', 'diff', 'patch', 'wget', 'ping',
+  'dig', 'nslookup', 'traceroute', 'ifconfig', 'netstat', 'lsof', 'deno',
+  'bun', 'tsx', 'ts-node', 'go', 'rustc', 'ruby', 'gem', 'bundle', 'rails',
+  'java', 'javac', 'mvn', 'gradle', 'gradlew', 'mvnw', 'kotlin', 'swift',
+  'xcodebuild', 'pod', 'flutter', 'dart', 'php', 'composer', 'dotnet',
+  'pytest', 'tox', 'poetry', 'pipenv', 'uv', 'conda', 'jupyter', 'tsc',
+  'eslint', 'prettier', 'jest', 'vitest', 'mocha', 'playwright', 'cypress',
+  'webpack', 'vite', 'rollup', 'esbuild', 'terraform', 'ansible', 'aws',
+  'gcloud', 'az', 'fly', 'flyctl', 'heroku', 'netlify', 'wrangler',
+  'supabase', 'firebase', 'stripe', 'ngrok', 'just', 'cmake', 'ctest',
+  'clang', 'gcc', 'g++', 'ffmpeg', 'convert', 'magick', 'exiftool', 'jq',
+  'yq', 'http', 'https', 'nc', 'scp', 'sftp', 'crontab', 'launchctl',
+  'systemctl', 'service', 'tmux', 'screen', 'claude', 'ollama', 'psql',
+  'mysql', 'sqlite3', 'redis-cli', 'mongosh',
+]);
+
+// Subcommands are displayed only from this closed vocabulary too: the second
+// token of a whitelisted tool is still user-controlled text ("git <paste>")
+// and can carry a secret exactly like any argument.
+const KNOWN_SUBCOMMANDS = new Set([
+  // git
+  'status', 'log', 'diff', 'add', 'commit', 'push', 'pull', 'fetch', 'clone',
+  'checkout', 'switch', 'branch', 'merge', 'rebase', 'reset', 'stash', 'tag',
+  'remote', 'show', 'init', 'restore', 'cherry-pick', 'bisect', 'blame',
+  'worktree', 'submodule', 'apply', 'revert', 'grep',
+  // npm / pnpm / yarn / npx / pip / cargo / brew ...
+  'install', 'i', 'uninstall', 'remove', 'rm', 'run', 'start', 'stop',
+  'restart', 'test', 'build', 'dev', 'lint', 'format', 'publish', 'ci',
+  'update', 'upgrade', 'outdated', 'audit', 'exec', 'create', 'link',
+  'unlink', 'list', 'ls', 'info', 'search', 'view', 'pack', 'cache',
+  'config', 'get', 'set', 'help', 'version', 'login', 'logout', 'whoami',
+  'freeze', 'download', 'wheel', 'check', 'fmt', 'clippy', 'doc', 'bench',
+  'new', 'tap', 'services', 'cleanup', 'doctor', 'pin', 'unpin',
+  // docker / kubectl / compose
+  'ps', 'images', 'image', 'logs', 'compose', 'up', 'down', 'volume',
+  'network', 'inspect', 'system', 'prune', 'rmi', 'container', 'describe',
+  'delete', 'edit', 'scale', 'rollout', 'port-forward', 'top', 'cp',
+  'attach', 'wait', 'apply',
+  // gh / vercel / misc
+  'pr', 'issue', 'repo', 'release', 'workflow', 'gist', 'api', 'auth',
+  'browse', 'deploy', 'env', 'domains', 'alias', 'secrets', 'teams',
+  'projects', 'dns', 'certs', 'serve',
+  // make-style common targets
+  'all', 'clean',
+]);
+
+// Anonymized-head tags keep only the script "kind" — a closed set, because a
+// raw extension is user-controlled too (./x.<secret> must not leak).
+const SCRIPT_EXT_TAGS = new Map([
+  ['.sh', 'sh'], ['.bash', 'sh'], ['.zsh', 'sh'], ['.py', 'py'],
+  ['.js', 'js'], ['.mjs', 'js'], ['.cjs', 'js'], ['.ts', 'ts'],
+  ['.rb', 'rb'], ['.pl', 'pl'],
+]);
+
+// zsh extended history: ": <epoch>:<duration>;command"
+const ZSH_EXTENDED_RE = /^:\s*(\d+):(\d+);(.*)$/;
+
+// Raw command → redacted display template, or null for blanks/comments.
+// Leading VAR=value assignments are values — skipped, but counted as args.
+// DISPLAY IS CLOSED-VOCABULARY ONLY: command words outside KNOWN_HEADS and
+// subcommands outside KNOWN_SUBCOMMANDS never appear verbatim (a name like
+// ./deploy-<password>.sh or "git <pasted-key>" would otherwise leak).
+function redactCommand(norm) {
+  const tokens = norm.split(' ');
+  let i = 0;
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+  if (i >= tokens.length) return null;
+  const head = path.basename(tokens[i]);
+  if (!head || head.startsWith('#')) return null;
+  let rest = tokens.length - i - 1;
+  let tpl;
+  if (KNOWN_HEADS.has(head)) {
+    tpl = head;
+    if (SUBCOMMAND_HEADS.has(head) && rest > 0 && KNOWN_SUBCOMMANDS.has(tokens[i + 1])) {
+      tpl += ' ' + tokens[i + 1];
+      rest--;
+    }
+  } else {
+    // Unknown command name: anonymize to "[<kind>:<fnv1a of basename>]" —
+    // stable across occurrences (rituals keep their identity) but the name
+    // itself, which may embed a secret, never reaches a finding.
+    const tag = SCRIPT_EXT_TAGS.get(path.extname(head).toLowerCase()) || 'cmd';
+    tpl = `[${tag}:${fnv1aHex(head)}]`;
+  }
+  const argCount = rest + i; // env assignments count as redacted args too
+  if (argCount > 0) tpl += ` …(${argCount} arg${argCount === 1 ? '' : 's'})`;
+  return tpl;
+}
+
+// Parse one history file into {tpl, norm, ts} entries (ts in ms or null).
+// Handles zsh extended format and plain lines (bash). Missing/unreadable
+// files are silently skipped (stats.skipped++), matching the walker contract.
+function readHistoryEntries(file, stats) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    stats.skipped++;
+    return null;
+  }
+  const entries = [];
+  for (const line of raw.split('\n')) {
+    let ts = null, cmd = line;
+    const m = ZSH_EXTENDED_RE.exec(line);
+    if (m) { ts = Number(m[1]) * 1000; cmd = m[3]; }
+    const norm = cmd.replace(/\s+/g, ' ').trim();
+    if (!norm) continue;
+    const tpl = redactCommand(norm);
+    if (!tpl) continue;
+    entries.push({ tpl, norm, ts });
+  }
+  return entries.slice(-MAX_HISTORY_ENTRIES);
+}
+
+// spanWeeks from zsh timestamps when present; bash has none → assume 4.
+function historySpanWeeks(tsList) {
+  const ts = tsList.filter((t) => Number.isFinite(t) && t > 0);
+  if (ts.length < 2) return 4;
+  let min = Infinity, max = -Infinity;
+  for (const t of ts) { if (t < min) min = t; if (t > max) max = t; }
+  const w = (max - min) / WEEK_MS;
+  return w > 0 ? w : 4;
+}
+
+function detectShellRituals(ctx) {
+  if (ctx.shellHistory !== true) return []; // opt-in gate — default never reads history
+  const findings = [];
+  const sources = [path.join(ctx.home, '.zsh_history'), path.join(ctx.home, '.bash_history')];
+  // Detection B tally across both files. Keyed by the raw normalized command —
+  // in memory only; nothing from a key ever reaches a finding.
+  const aliasTally = new Map();
+  const fileMtimes = new Map();
+
+  for (const file of sources) {
+    const entries = readHistoryEntries(file, ctx.stats);
+    if (!entries || !entries.length) continue;
+    let mtimeIso;
+    try { mtimeIso = iso(fs.lstatSync(file).mtimeMs); } catch (e) { mtimeIso = iso(Date.now()); }
+    fileMtimes.set(file, mtimeIso);
+
+    // --- Detection A: command rituals — consecutive-entry n-grams (2..5) ---
+    const grams = new Map();
+    for (let n = 2; n <= 5; n++) {
+      for (let i = 0; i + n <= entries.length; i++) {
+        const window = entries.slice(i, i + n);
+        const seq = window.map((e) => e.tpl);
+        if (new Set(seq).size < 2) continue; // one command repeated is not a ritual
+        const key = seq.join('\u0000'); // templates contain spaces — join on a char they never contain
+        let g = grams.get(key);
+        if (!g) { g = { seq, count: 0, ts: [] }; grams.set(key, g); }
+        g.count++;
+        if (window[0].ts) g.ts.push(window[0].ts);
+      }
+    }
+    // Longest qualifying sequence wins; drop any shorter n-gram it fully
+    // contains as a contiguous run (checked on the joined key with separators).
+    const qualifying = [...grams.entries()]
+      .filter(([, g]) => g.count >= RITUAL_MIN_COUNT)
+      .sort((a, b) => b[1].seq.length - a[1].seq.length || b[1].count - a[1].count);
+    const keptKeys = [];
+    const kept = [];
+    for (const [key, g] of qualifying) {
+      if (keptKeys.some((k) => ('\u0000' + k + '\u0000').includes('\u0000' + key + '\u0000'))) continue;
+      keptKeys.push(key);
+      kept.push(g);
+    }
+    // Phase-shifted rotations of one loop ("A B C A B" vs "B C A B C") share a
+    // command set but are not substrings of each other - collapse to one
+    // finding per set (strongest occurrence wins), then keep the top few so a
+    // busy history can't flood the report.
+    const bySig = new Map();
+    for (const g of kept) {
+      const sig = [...new Set(g.seq)].sort().join('\u0000');
+      const prev = bySig.get(sig);
+      if (!prev || g.count * g.seq.length > prev.count * prev.seq.length) bySig.set(sig, g);
+    }
+    const topRituals = [...bySig.values()]
+      .sort((a, b) => b.count * b.seq.length - a.count * a.seq.length)
+      .slice(0, 3);
+    for (const g of topRituals) {
+      const seqLen = g.seq.length;
+      const spanWeeks = historySpanWeeks(g.ts);
+      const perWeek = g.count / Math.max(spanWeeks, 1);
+      const est = estimateHours('shell-ritual', { perWeek, seqLen });
+      const display = g.seq.join(' -> ');
+      findings.push(makeFinding(
+        'shell-rituals',
+        'You type the same ritual by hand',
+        `You typed the same ${seqLen}-command sequence ${g.count} times in your shell history. ` +
+        `Arguments are redacted; only command names are shown.`,
+        [{ path: file, detail: `${display} — ${g.count} times`, mtime: mtimeIso }],
+        { count: g.count, estMinutesPerInstance: round2(seqLen * 20 / 60), estHoursPerWeek: est, confidence: 0.9, oneShot: false },
+        'ritual|' + display
+      ));
+    }
+
+    // --- Detection B tally: long commands retyped verbatim ---
+    for (const e of entries) {
+      if (e.norm.length <= ALIAS_MIN_LENGTH) continue;
+      let t = aliasTally.get(e.norm);
+      if (!t) { t = { tpl: e.tpl, len: e.norm.length, count: 0, perFile: new Map(), ts: [] }; aliasTally.set(e.norm, t); }
+      t.count++;
+      t.perFile.set(file, (t.perFile.get(file) || 0) + 1);
+      if (e.ts) t.ts.push(e.ts);
+    }
+  }
+
+  // --- Detection B findings: alias candidates (top 3 - no flooding) ---
+  const aliasTop = [...aliasTally.values()]
+    .filter((t) => t.count >= ALIAS_MIN_COUNT)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
+  for (const t of aliasTop) {
+    const spanWeeks = historySpanWeeks(t.ts);
+    const perWeek = t.count / Math.max(spanWeeks, 1);
+    const est = estimateHours('alias-candidate', { perWeek });
+    const evidence = [...t.perFile.entries()].map(([file, n]) => ({
+      path: file,
+      detail: `${t.tpl} — ${n} time${n === 1 ? '' : 's'} here, ${t.len} characters retyped in full`,
+      mtime: fileMtimes.get(file) || iso(Date.now()),
+    }));
+    findings.push(makeFinding(
+      'shell-rituals',
+      'You retype a command an alias could own',
+      `You typed out the same ${t.len}-character command ${t.count} times ("${t.tpl}"). ` +
+      `One alias replaces every keystroke of it.`,
+      evidence,
+      { count: t.count, estMinutesPerInstance: 0.25, estHoursPerWeek: est, confidence: 0.9, oneShot: false },
+      'alias|' + t.tpl + '|' + t.len
+    ));
+  }
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
 // DETECTORS — spec order. Execution order differs slightly (see EXEC_ORDER):
 // series detectors run first and "claim" their files so the same manual work
 // is never billed twice across detectors.
@@ -950,6 +1238,7 @@ const DETECTOR_META = {
   'commit-drudgery':     { kind: 'changelog-agent',    title: 'Changelog agent' },
   'csv-report-assembly': { kind: 'report-assembler',   title: 'Report assembler agent' },
   'scaffold-repetition': { kind: 'scaffold-skill',     title: 'Scaffold skill' },
+  'shell-rituals':       { kind: 'shell-ritual',       title: 'Shell script agent' },
 };
 
 const DETECTORS = [
@@ -963,13 +1252,14 @@ const DETECTORS = [
   { name: 'commit-drudgery',     automation: DETECTOR_META['commit-drudgery'],     run: detectCommitDrudgery },
   { name: 'csv-report-assembly', automation: DETECTOR_META['csv-report-assembly'], run: detectCsvReportAssembly },
   { name: 'scaffold-repetition', automation: DETECTOR_META['scaffold-repetition'], run: detectScaffoldRepetition },
+  { name: 'shell-rituals',       automation: DETECTOR_META['shell-rituals'],       run: detectShellRituals }, // opt-in
 ];
 
 // Claim-producing detectors first so hours are never double-counted.
 const EXEC_ORDER = [
   'dated-recurrence', 'csv-report-assembly', 'version-chains', 'near-duplicate-text',
   'untested-repos', 'undocumented-repos', 'screenshot-pileup', 'downloads-entropy',
-  'commit-drudgery', 'scaffold-repetition',
+  'commit-drudgery', 'scaffold-repetition', 'shell-rituals',
 ];
 
 // ---------------------------------------------------------------------------
@@ -1004,6 +1294,7 @@ async function runScan(opts = {}, onProgress) {
 
   emit('analyzing', '', true);
   const ctx = buildContext(files, repos, roots, stats, home);
+  ctx.shellHistory = opts.shellHistory === true; // opt-in only — anything else never reads history
   const byName = new Map(DETECTORS.map((d) => [d.name, d]));
   const findings = [];
   for (const name of EXEC_ORDER) {
@@ -1041,13 +1332,14 @@ async function runScan(opts = {}, onProgress) {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { roots: null, out: null };
+  const args = { roots: null, out: null, shell: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--roots=')) args.roots = a.slice(8).split(',').map((s) => s.trim()).filter(Boolean);
     else if (a === '--roots' && argv[i + 1]) args.roots = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
     else if (a.startsWith('--out=')) args.out = a.slice(6);
     else if (a === '--out' && argv[i + 1]) args.out = argv[++i];
+    else if (a === '--shell') args.shell = true; // opt in to the shell-history detector
   }
   return args;
 }
@@ -1056,7 +1348,7 @@ if (require.main === module) {
   const args = parseArgs(process.argv.slice(2));
   const outPath = path.resolve(args.out || path.join(__dirname, 'scan.json'));
   const tty = process.stderr.isTTY;
-  runScan({ roots: args.roots }, (p) => {
+  runScan({ roots: args.roots, shellHistory: args.shell }, (p) => {
     const tail = p.currentPath.length > 56 ? '…' + p.currentPath.slice(-55) : p.currentPath;
     const line = `[latent] ${p.phase}  files:${p.filesSeen} dirs:${p.dirsSeen}  ${tail}`;
     process.stderr.write(tty ? '\r' + line.padEnd(110).slice(0, 110) : line + '\n');

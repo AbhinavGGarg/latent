@@ -1,0 +1,13 @@
+{
+  "name": "latent-scan",
+  "version": "0.1.0",
+  "description": "Read your machine. Get receipts.",
+  "bin": {
+    "latent": "./cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": "github:AbhinavGGarg/latent",
+  "license": "MIT"
+}

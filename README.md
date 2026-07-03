@@ -16,11 +16,19 @@ already do, and gives you three things:
 ## Run it
 
 ```
+npx github:AbhinavGGarg/latent
+```
+
+(repo must be public for npx; until then: `git clone` + `node server.js`)
+
+Or, from a checkout:
+
+```
 node server.js
 ```
 
-Open http://localhost:8820 and press **Read my machine**. That's it — pure Node stdlib,
-nothing to install, no build step.
+Open http://localhost:8820 and press **Read my machine** (the npx path opens it for you).
+That's it — pure Node stdlib, nothing to install, no build step.
 
 By default it reads `~/Downloads`, `~/Desktop`, `~/Documents`, and common code folders
 (`~/Projects`, `~/dev`, `~/code`, ...) that exist. Point it elsewhere:

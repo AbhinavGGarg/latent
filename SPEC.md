@@ -58,6 +58,9 @@ over the index. Per-file text reads only for whitelisted exts (.md .txt .csv .js
 9. **csv-report-assembly** — same-dir .csv series sharing identical header row, ≥4 files. Like #2. Cap 2.0.
 10. **scaffold-repetition** — ≥3 non-git project dirs sharing same boilerplate fileset signature
     (e.g. {index.html, style.css} or {package.json, index.js}). 35min ÷ 8wk. Cap 0.7.
+11. **shell-rituals** — OPT-IN ONLY (`--shell` / POST `{shellHistory:true}`): ~/.zsh_history + ~/.bash_history,
+    last 20k entries; findings show redacted templates only (`git push …(2 args)`) — no paths/flags/values, ever.
+    Rituals: consecutive 2–5-command n-grams ≥8× → occ/wk × len × 20s, cap 1.5. Alias: >40-char cmd ≥10× → occ/wk × 15s, cap 0.5.
 
 Walker rules: default roots `[$HOME/Downloads, $HOME/Desktop, $HOME/Documents]` plus common
 code dirs ($HOME/{Projects,projects,Developer,dev,code,repos,workspace}) — existing only. EXCLUDE dirs: node_modules, .git (contents; still note repo), Library, .cache, .npm,

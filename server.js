@@ -55,6 +55,8 @@
       'Read the CSV series in the evidence, confirm the shared header row, and load the most recent files. Produce ./out/report.md — the assembled report this series implies: period totals, deltas versus the previous period, notable outliers, and a compact summary table. Also write ./out/assemble.js, a Node stdlib-only script that regenerates the same report whenever a new CSV lands in that directory.',
     'scaffold-skill':
       'Diff the sibling project directories in the evidence and extract the boilerplate fileset they share. Create ./out/scaffold/ holding a canonical starter copy of each shared file with project-specific values replaced by {{name}}-style placeholders, plus ./out/new-project.sh that stamps a fresh project directory out of the scaffold given a project name.',
+    'shell-ritual':
+      'The evidence shows a redacted command sequence typed by hand — command names and subcommands only; every argument was stripped before it reached this brief. Draft the automation that owns it, in ./out/ only: ./out/ritual.sh, a shell script reproducing the sequence in order with a clearly named {{PLACEHOLDER}} variable for each redacted argument and a comment stating what belongs there; ./out/aliases.sh, alias or function definitions for the short form; and ./out/justfile, the same ritual as a just recipe. Execute nothing — not the ritual, not the drafts; write files only. Note in RECEIPT.md that all arguments were redacted at scan time and must be filled in by the user before first run.',
   };
   const FALLBACK_TASK =
     'Study the evidence above and draft the automation that would remove this recurring manual step. Write a short plan and every proposed artifact to ./out/.';
@@ -148,10 +150,11 @@
     return scannerPromise;
   }
 
-  async function startScan(roots) {
+  async function startScan(roots, shellHistory) {
     try {
       const runScan = await loadScanner();
       const opts = roots ? { roots } : {};
+      if (shellHistory === true) opts.shellHistory = true; // opt-in shell-rituals detector
       const scan = await runScan(opts, (p) => { progress = p; });
       await withScanJsonLock(async () => {
         // Finding ids hash their evidence paths, so an unchanged finding keeps
@@ -239,6 +242,7 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
   async function apiPostScan(req, res) {
     const raw = await readBody(req);
     let roots;
+    let shellHistory = false;
     if (raw.trim()) {
       let parsed;
       try { parsed = JSON.parse(raw); } catch (_e) {
@@ -248,12 +252,13 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
         const cleaned = parsed.roots.filter((r) => typeof r === 'string' && r.trim());
         if (cleaned.length) roots = cleaned;
       }
+      if (parsed && parsed.shellHistory === true) shellHistory = true; // opt-in only
     }
     // Single-flight: check-and-set in one synchronous step (no await between).
     if (running) return sendJSON(res, 409, { error: 'scan already running' });
     running = true;
     progress = { phase: 'walking', filesSeen: 0, dirsSeen: 0, currentPath: '' };
-    startScan(roots); // fire and forget; resets `running` in its finally
+    startScan(roots, shellHistory); // fire and forget; resets `running` in its finally
     sendJSON(res, 202, { started: true });
   }
 
