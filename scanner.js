@@ -1075,4 +1075,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { runScan, DETECTORS, ESTIMATES };
+module.exports = { runScan, DETECTORS, ESTIMATES, defaultRoots, resolveRoots };

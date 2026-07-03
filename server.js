@@ -257,6 +257,22 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     sendJSON(res, 202, { started: true });
   }
 
+  // Existing default-root candidates, for the consent panel's folder picker.
+  async function apiGetRoots(req, res) {
+    const os = await import('node:os');
+    const mod = await import('./scanner.js');
+    const resolveRoots = mod.resolveRoots || (mod.default && mod.default.resolveRoots);
+    if (typeof resolveRoots !== 'function') {
+      return sendJSON(res, 500, { error: 'scanner does not export resolveRoots' });
+    }
+    const home = os.homedir();
+    const roots = resolveRoots(null, home).map((p) => ({
+      path: p,
+      display: p.startsWith(home) ? '~' + p.slice(home.length) : p,
+    }));
+    sendJSON(res, 200, { roots, home });
+  }
+
   function apiGetProgress(req, res) {
     // SPEC: "latest progress object + {running:bool}". Fields are merged into
     // the response; a nested `progress` copy is also included so either read
@@ -384,6 +400,10 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     }
     if (p === '/api/progress') {
       if (req.method === 'GET') return apiGetProgress(req, res);
+      return sendJSON(res, 405, { error: 'method not allowed' });
+    }
+    if (p === '/api/roots') {
+      if (req.method === 'GET') return apiGetRoots(req, res);
       return sendJSON(res, 405, { error: 'method not allowed' });
     }
     if (p === '/api/automate') {
