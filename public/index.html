@@ -91,6 +91,9 @@ button { font: inherit; color: inherit; }
   text-decoration-color: var(--seam); cursor: pointer;
 }
 .btn-text:hover { text-decoration-color: var(--ash); }
+.btn-text:disabled { opacity: .45; cursor: default; }
+.btn-text.quiet { color: var(--ash); }
+.btn-text.quiet:hover:not(:disabled) { color: var(--bone); }
 
 /* demo marker — quiet, never heat/glacier */
 .chip-demo {
@@ -112,6 +115,18 @@ button { font: inherit; color: inherit; }
 .chip-cold::before {
   content: ""; width: 6px; height: 6px; border-radius: 50%;
   background: var(--glacier); flex: none;
+}
+
+/* dismissed = set aside by the user, not handled by automation — ash, never glacier */
+.chip-ash {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: 500 12px var(--font-mono); letter-spacing: 0.04em;
+  color: var(--ash); border: 1px solid var(--seam);
+  border-radius: 999px; padding: 5px 13px;
+}
+.chip-ash::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ash); flex: none;
 }
 
 /* ---------- idle: the landing ---------- */
@@ -257,6 +272,10 @@ button { font: inherit; color: inherit; }
 .topbar-stat .dim { color: var(--ash); }
 .topbar-spacer { flex: 1; }
 .topbar .btn { padding: 8px 16px; font-size: 13px; }
+/* THE MOMENT: one subtle pulse on the score when it rises — earned, not loud */
+.stat-pulse { transform-origin: left center; }
+.stat-pulse.on { animation: statPulse .18s cubic-bezier(.25,.9,.3,1.1) both; }
+@keyframes statPulse { from { transform: scale(1.06); } to { transform: scale(1); } }
 
 .report-main { max-width: 880px; margin: 0 auto; padding: 44px 24px 20px; }
 .report-intro { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 26px; }
@@ -287,6 +306,27 @@ button { font: inherit; color: inherit; }
 .heat-est { font: 500 12.5px var(--font-mono); white-space: nowrap; }
 .card-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .card-error { font: 400 12.5px var(--font-mono); color: var(--ash); }
+
+/* cold rows — handled receipts, collapsed and sunk below the active list */
+.cold-head {
+  font: 500 11px var(--font-mono); letter-spacing: 0.14em;
+  color: var(--ash); text-transform: uppercase; margin: 28px 0 4px;
+}
+.cold-row {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: var(--soot); border: 1px solid var(--seam); border-radius: 12px;
+  padding: 13px 20px; margin-top: 10px;
+  animation: fadeUp .3s cubic-bezier(.2,.7,.3,1) both;
+}
+.cold-title { font: 500 14px var(--font-sans); color: var(--ash); flex: 1; min-width: 160px; overflow-wrap: anywhere; }
+.cold-est { font: 400 12px var(--font-mono); color: var(--ash); text-decoration: line-through; white-space: nowrap; }
+
+/* all receipts handled */
+.clean-sheet {
+  text-align: center; padding: 56px 0 30px;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+}
+.clean-sheet-score { font: 500 13px var(--font-mono); letter-spacing: 0.08em; color: var(--bone); }
 
 /* empty / error states */
 .state-card {
@@ -320,6 +360,12 @@ button { font: inherit; color: inherit; }
 .modal-close:hover { color: var(--bone); border-color: var(--ash); }
 .modal-body { overflow: auto; padding: 20px 22px; }
 .brief-pre { font: 400 12.5px/1.75 var(--font-mono); white-space: pre-wrap; color: var(--bone); overflow-wrap: anywhere; }
+/* demo-only banner above a sample brief — mono, ash, one line + one quiet link */
+.brief-banner {
+  font: 500 12px/1.7 var(--font-mono); color: var(--ash);
+  margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--seam);
+}
+.brief-banner .btn-text { display: inline-block; margin-top: 4px; font-size: 12px; }
 .modal-foot {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 14px 22px; border-top: 1px solid var(--seam);
@@ -362,6 +408,7 @@ button { font: inherit; color: inherit; }
   max-width: 58ch;
 }
 .consent-agree input { accent-color: var(--bone); margin-top: 4px; flex: none; cursor: pointer; }
+.consent-sub { display: block; font: 400 12px/1.6 var(--font-mono); color: var(--ash); margin-top: 3px; }
 
 /* ---------- footer / methodology ---------- */
 .footer {
@@ -425,9 +472,67 @@ const REDUCED_MOTION = window.matchMedia &&
 
 const MAX_RECEIPTS = 12;              // SPEC: cap displayed findings at 12
 const POLL_MS = 400;                  // SPEC: poll /api/progress at 400ms, only while scanning
-const CONSENT_KEY = 'latentConsent';  // {roots:[abs paths], consentedAt: ISO}
+const CONSENT_KEY = 'latentConsent';  // {roots:[abs paths], shellHistory:bool, consentedAt: ISO}
 /* Static-host demo (Vercel): no local server -> sample data + run-it-locally CTA. */
 const DEMO_INSTALL = 'npx github:AbhinavGGarg/latent';
+const DEMO_PLAYBOOKS = '/Users/sam/latent/playbooks/'; // the demo persona's machine
+
+/* Demo briefs are rendered client-side so the loop completes without a server.
+   Task paragraphs are copied verbatim from server.js KIND_TASKS, trimmed to the
+   kinds present in demo-scan.json. */
+const DEMO_KIND_TASKS = {
+  'recurring-draft':
+    'This is a recurring series. Open the evidence directory, sort the series by date, and read the two or three newest instances to learn the naming pattern, the date convention, and which sections stay stable versus which change each time. Then produce the NEXT instance in the series as a draft in ./out/: correct next filename per the pattern, stable structure carried over, every date and sequence marker advanced, and a clearly marked TODO placeholder wherever fresh input is required.',
+  'template-extractor':
+    'Compare the near-identical documents in the evidence and separate the invariant skeleton from the parts that vary per instance. Write ./out/TEMPLATE.md containing the shared structure with {{placeholder}} markers at each varying field, and ./out/FIELDS.md listing every placeholder with its meaning and one real example value drawn from the evidence files.',
+  'test-writer':
+    'Read the repository named in the evidence and map its public surface: exported functions, entry points, and the behaviors the code clearly promises. Write a plan first at ./out/PLAN.md listing what you will test and why, then write a runnable test suite into ./out/tests/ using the language the repo already uses and its stdlib test tooling (no new dependencies). Cover happy paths, the obvious edge cases, and one regression-style test for each bug-prone spot you notice. End the receipt with the exact one-line command that runs the suite.',
+  'file-organizer':
+    'Inventory the loose files in the evidence directory and design a small, predictable folder scheme for them — by type and date, at most two levels deep. Do not move anything. Write ./out/PLAN.md describing the scheme and why, then ./out/moves.sh: a reviewable shell script of mv commands (one per line, all paths quoted) that would carry the plan out, plus ./out/undo.sh that reverses every move.',
+  'scaffold-skill':
+    'Diff the sibling project directories in the evidence and extract the boilerplate fileset they share. Create ./out/scaffold/ holding a canonical starter copy of each shared file with project-specific values replaced by {{name}}-style placeholders, plus ./out/new-project.sh that stamps a fresh project directory out of the scaffold given a project name.',
+  'report-assembler':
+    'Read the CSV series in the evidence, confirm the shared header row, and load the most recent files. Produce ./out/report.md — the assembled report this series implies: period totals, deltas versus the previous period, notable outliers, and a compact summary table. Also write ./out/assemble.js, a Node stdlib-only script that regenerates the same report whenever a new CSV lands in that directory.',
+  'doc-writer':
+    'Read the repository named in the evidence — entry points, scripts, config — and reconstruct what the project is, how to run it, and how it is laid out. Write a complete README draft to ./out/README.md: a one-paragraph purpose statement, a quick start with exact commands, a file/module map, and any configuration or environment notes you can verify from the code itself. State only what the code demonstrates; mark anything inferred as an assumption.',
+};
+const DEMO_FALLBACK_TASK =
+  'Study the evidence above and draft the automation that would remove this recurring manual step. Write a short plan and every proposed artifact to ./out/.';
+
+/* Mirrors server.js renderBrief: same BRIEF.md shape, demo provenance line. */
+function renderDemoBrief(finding) {
+  const evidence = (finding.evidence || [])
+    .map(e => '- ' + e.path + ' — ' + e.detail)
+    .join('\n') || '- (no evidence rows)';
+  const kind = finding.automation && finding.automation.kind;
+  const task = DEMO_KIND_TASKS[kind] || DEMO_FALLBACK_TASK;
+  const dir = '~/latent/playbooks/' + finding.id;
+  return '# Automation brief — ' + finding.title + '\n' +
+    'Generated by Latent (demo). Status: DRAFT-ONLY. Never send/submit/push; write artifacts to ./out/.\n' +
+    '\n## What keeps happening\n' + finding.summary + '\n' +
+    '\n## Evidence\n' + evidence + '\n' +
+    '\n## Your task\n' + task + '\n' +
+    '\n## Constraints\n' +
+    '- Draft only. All output inside ' + dir + '/out/. Do not modify the evidence files.\n' +
+    '- Leave a RECEIPT.md: what you read, what you produced.\n' +
+    '\nRun it: `cd ' + dir + ' && claude -p "$(cat BRIEF.md)"`\n';
+}
+
+/* Client mirror of the server's live-score recompute — same formula as the
+   scanner: clamp(round(100 - 9*hours), 4, 96). Used directly only in demo mode
+   (real mode animates to the number the server returns). */
+function recomputeScoreFrom(scanObj, statusById) {
+  let hoursSum = 0;
+  (scanObj.findings || []).forEach(f => {
+    const st = statusById[f.id] || (f.automation && f.automation.status);
+    if (st === 'automated' || st === 'dismissed') return;
+    hoursSum += (f.metrics && f.metrics.estHoursPerWeek) || 0;
+  });
+  return {
+    value: Math.min(96, Math.max(4, Math.round(100 - 9 * hoursSum))),
+    recoverableHoursPerWeek: Math.round(hoursSum * 10) / 10,
+  };
+}
 
 /* Consent persistence: scans only ever start through the consent panel; rescans
    reuse this stored scope without re-prompting. "View the last read" never needs it. */
@@ -439,9 +544,13 @@ function loadConsent() {
   } catch (e) { /* absent or malformed — treat as no consent */ }
   return null;
 }
-function saveConsent(roots) {
+function saveConsent(roots, shellHistory) {
   try {
-    localStorage.setItem(CONSENT_KEY, JSON.stringify({ roots, consentedAt: new Date().toISOString() }));
+    localStorage.setItem(CONSENT_KEY, JSON.stringify({
+      roots,
+      shellHistory: shellHistory === true,
+      consentedAt: new Date().toISOString(),
+    }));
   } catch (e) { /* storage may be unavailable; the scan still runs */ }
 }
 
@@ -602,6 +711,60 @@ function CountUp({ to, dur, play }) {
     return () => cancelAnimationFrame(raf);
   }, [play, to, dur]);
   return <React.Fragment>{v.toFixed(1)}</React.Fragment>;
+}
+
+/* Topbar numbers ease to new values when a status change moves the score
+   (~600ms). Reduced motion: instant swap. */
+function TweenNumber({ value, decimals }) {
+  const [disp, setDisp] = useState(value);
+  const fromRef = useRef(value);
+  useEffect(() => {
+    // Hidden tab: rAF never fires — swap instantly rather than wedge mid-tween.
+    if (REDUCED_MOTION || document.hidden) { fromRef.current = value; setDisp(value); return; }
+    const from = fromRef.current, to = value;
+    if (from === to) return;
+    let raf, done = false;
+    const t0 = performance.now(), dur = 600;
+    const step = t => {
+      const k = Math.min(1, (t - t0) / dur);
+      const v = from + (to - from) * (1 - Math.pow(1 - k, 3));
+      fromRef.current = v; setDisp(v);
+      if (k < 1) raf = requestAnimationFrame(step);
+      else done = true;
+    };
+    raf = requestAnimationFrame(step);
+    // If the tab hides mid-tween the rAF loop stalls; snap to the real number.
+    const guard = setTimeout(() => { if (!done) { fromRef.current = value; setDisp(value); } }, dur + 400);
+    return () => { cancelAnimationFrame(raf); clearTimeout(guard); };
+  }, [value]);
+  return <React.Fragment>{disp.toFixed(decimals)}</React.Fragment>;
+}
+
+/* Score + hours in the topbar. When the score RISES the score stat pulses once
+   (scale 1.06 → 1, 180ms) — the loop's payoff moment. */
+function TopStats({ value, hours }) {
+  const [pulse, setPulse] = useState(false);
+  const prevRef = useRef(value);
+  useEffect(() => {
+    const prev = prevRef.current;
+    prevRef.current = value;
+    if (REDUCED_MOTION || value == null || prev == null || !(value > prev)) return;
+    setPulse(true);
+    const t = setTimeout(() => setPulse(false), 240);
+    return () => clearTimeout(t);
+  }, [value]);
+  return (
+    <React.Fragment>
+      <span className={'topbar-stat stat-pulse' + (pulse ? ' on' : '')}>
+        LEVERAGE {value != null ? <TweenNumber value={value} decimals={0} /> : '—'}
+        <span className="dim">/100</span>
+      </span>
+      <span className="topbar-stat">
+        <span className="heat-text">≈<TweenNumber value={hours} decimals={1} /> h/wk</span>{' '}
+        <span className="dim">by hand, est.</span>
+      </span>
+    </React.Fragment>
+  );
 }
 
 /* Dialog stack + body scroll lock. Escape closes only the topmost dialog, and the
@@ -827,7 +990,7 @@ function Landing({ hasLast, onRead, onViewLast, demo }) {
         <div className="land-footer-inner">
           <span>Latent — advice is slop; receipts and a button are not.</span>
           <span aria-hidden="true">·</span>
-          <span>MIT license</span>
+          <span>FSL-1.1-MIT license</span>
           <span aria-hidden="true">·</span>
           <span>Runs entirely on your machine.</span>
         </div>
@@ -837,7 +1000,7 @@ function Landing({ hasLast, onRead, onViewLast, demo }) {
 }
 
 /* ---------- consent panel — the gate every scan passes through ---------- */
-function ConsentModal({ storedRoots, onClose, onStart }) {
+function ConsentModal({ storedRoots, storedShell, onClose, onStart }) {
   // Captured once: the parent recomputes storedRoots each render, and a fresh
   // identity must not re-run the fetch effect and wipe the user's edits.
   const storedRef = useRef(storedRoots || null);
@@ -845,6 +1008,8 @@ function ConsentModal({ storedRoots, onClose, onStart }) {
   const [loadErr, setLoadErr] = useState('');
   const [custom, setCustom] = useState('');
   const [agreed, setAgreed] = useState(false); // UNCHECKED by default — the point of the panel
+  // Shell history: opt-in, UNCHECKED by default; mirrors a previously stored choice.
+  const [shell, setShell] = useState(storedShell === true);
 
   useEffect(() => {
     let dead = false;
@@ -903,7 +1068,7 @@ function ConsentModal({ storedRoots, onClose, onStart }) {
           <button
             className="btn btn-primary"
             aria-disabled={!ready}
-            onClick={() => { if (ready) onStart(chosen); }}
+            onClick={() => { if (ready) onStart(chosen, shell); }}
           >Start the read</button>
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
         </React.Fragment>
@@ -941,10 +1106,26 @@ function ConsentModal({ storedRoots, onClose, onStart }) {
         </React.Fragment>
       )}
 
+      <div className="consent-h">Optional</div>
+      <label className="consent-row">
+        <input
+          type="checkbox"
+          checked={shell}
+          onChange={e => setShell(e.target.checked)}
+        />
+        <span>
+          <span className="consent-path">Shell history (~/.zsh_history, ~/.bash_history)</span>
+          <span className="consent-sub">
+            Finds repeated command rituals. Command names only — arguments are never read into the report.
+          </span>
+        </span>
+      </label>
+
       <div className="consent-h">What a read touches</div>
       <ul className="consent-disc">
         <li>file names, dates, sizes</li>
         <li>first lines of .md/.txt/.csv under 200KB · git history, read-only</li>
+        {shell ? <li>command names from shell history — never their arguments</li> : null}
         <li>only the folders selected above · nothing leaves this machine</li>
       </ul>
 
@@ -957,7 +1138,7 @@ function ConsentModal({ storedRoots, onClose, onStart }) {
 }
 
 /* ---------- receipt card ---------- */
-function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, onViewBrief }) {
+function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, onViewBrief, onSetStatus }) {
   const m = finding.metrics || {};
   const est = m.estHoursPerWeek || 0;
   const pct = Math.max(4, Math.min(100, (est / (maxEst || 1)) * 100));
@@ -1007,6 +1188,17 @@ function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, o
         ) : (
           <button className="btn btn-ghost" onClick={() => onAutomate(finding)}>Draft the automation</button>
         )}
+        {status !== 'drafting' ? (
+          <React.Fragment>
+            <button className="btn-text quiet" disabled={autoState.statusPending}
+                    onClick={() => onSetStatus(finding, 'automated')}>Mark automated</button>
+            <button className="btn-text quiet" disabled={autoState.statusPending}
+                    onClick={() => onSetStatus(finding, 'dismissed')}>Dismiss</button>
+          </React.Fragment>
+        ) : null}
+        {autoState.statusError ? (
+          <span className="card-error">The update failed — {autoState.statusError}.</span>
+        ) : null}
         {status === 'error' ? (
           <span className="card-error">
             The draft failed{autoState.error ? ' — ' + autoState.error : ''}.{' '}
@@ -1021,6 +1213,24 @@ function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, o
         ) : null}
       </div>
     </article>
+  );
+}
+
+/* Handled receipt, collapsed cold: chip + title + struck-through estimate + Undo.
+   AUTOMATED wears glacier (handled by automation); DISMISSED wears ash — the
+   user set it aside, nothing got handled. */
+function ColdRow({ finding, status, pending, error, onUndo }) {
+  const automated = status === 'automated';
+  return (
+    <div className="cold-row">
+      <span className={automated ? 'chip-cold' : 'chip-ash'}>
+        {automated ? 'AUTOMATED' : 'DISMISSED'}
+      </span>
+      <span className="cold-title">{finding.title}</span>
+      <span className="cold-est">{estLabel(finding)}</span>
+      <button className="btn-text quiet" disabled={pending} onClick={() => onUndo(finding)}>Undo</button>
+      {error ? <span className="card-error">The update failed — {error}.</span> : null}
+    </div>
   );
 }
 
@@ -1041,8 +1251,9 @@ function App() {
   const demoRevealSeen = useRef(false);
   const [consentOpen, setConsentOpen] = useState(false); // the gate: every scan starts here
   const [scanRoots, setScanRoots] = useState([]);        // display strings for the scanning sub-line
+  const [scanShell, setScanShell] = useState(false);     // shell history included in the running scan
   const scanStartedAt = useRef(0);
-  const lastRootsRef = useRef(null);                     // roots of the last started scan (for Retry)
+  const lastScanRef = useRef(null);                      // {roots, shellHistory} of the last started scan (for Retry)
   const canvasRef = useRef(null);
 
   const findings = useMemo(() => {
@@ -1057,12 +1268,13 @@ function App() {
     [findings]
   );
 
-  // Seed automation state from a loaded scan (persisted "briefed" statuses).
+  // Seed automation state from a loaded scan (persisted briefed/automated/dismissed).
   const seedAutoMap = useCallback(s => {
     const map = {};
     (s.findings || []).forEach(f => {
       const a = f.automation || {};
-      map[f.id] = { status: a.status === 'briefed' ? 'briefed' : 'idle', briefPath: a.briefPath || null, brief: null };
+      const st = ['briefed', 'automated', 'dismissed'].indexOf(a.status) !== -1 ? a.status : 'idle';
+      map[f.id] = { status: st, briefPath: a.briefPath || null, brief: null };
     });
     setAutoMap(map);
   }, []);
@@ -1080,7 +1292,7 @@ function App() {
           if (dead) return;
           if (pr.ok && pr.body && pr.body.running) {
             const c = loadConsent(); // resumed mid-scan: best-known scope for the sub-line
-            if (c) setScanRoots(c.roots.map(homeToTilde));
+            if (c) { setScanRoots(c.roots.map(homeToTilde)); setScanShell(c.shellHistory === true); }
             setPhase('scanning');
             return;
           }
@@ -1113,22 +1325,27 @@ function App() {
     }
   }, [seedAutoMap]);
 
-  /* Start a read of the given roots. Only ever reached through the consent panel
-     or a rescan/retry that reuses an already-consented scope. */
-  const startScan = useCallback(async roots => {
+  /* Start a read of the given roots (+ opt-in shell history). Only ever reached
+     through the consent panel or a rescan/retry that reuses an already-consented scope. */
+  const startScan = useCallback(async (roots, shellHistory) => {
     const scope = Array.isArray(roots) && roots.length ? roots : null;
+    const shell = shellHistory === true;
     setErrMsg('');
     // A rescan invalidates any open dialog — never re-open a stale one over a fresh report.
     setBriefModal(null);
     setShareOpen(false);
     setConsentOpen(false);
-    lastRootsRef.current = scope;
+    lastScanRef.current = { roots: scope, shellHistory: shell };
     setScanRoots((scope || []).map(homeToTilde));
+    setScanShell(shell);
+    const payload = {};
+    if (scope) payload.roots = scope;
+    if (shell) payload.shellHistory = true;
     try {
       const r = await fetchJSON('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: scope ? JSON.stringify({ roots: scope }) : '{}',
+        body: JSON.stringify(payload),
       });
       if (r.status === 202 || r.status === 409) {
         scanStartedAt.current = Date.now();
@@ -1144,24 +1361,26 @@ function App() {
     }
   }, []);
 
-  /* Consent panel confirmed: persist the scope, then read. */
-  const consentStart = useCallback(paths => {
-    saveConsent(paths);
-    startScan(paths);
+  /* Consent panel confirmed: persist the scope (+ shell opt-in), then read. */
+  const consentStart = useCallback((paths, shellHistory) => {
+    saveConsent(paths, shellHistory);
+    startScan(paths, shellHistory);
   }, [startScan]);
 
-  /* Rescan: consent-reuse. Same stored roots, no re-prompt; ask only if none stored. */
+  /* Rescan: consent-reuse. Same stored scope, no re-prompt; ask only if none stored. */
   const rescan = useCallback(() => {
     if (demoMode) { setDemoModal(true); return; } // demo can't scan anything
     const c = loadConsent();
-    if (c) startScan(c.roots);
+    if (c) startScan(c.roots, c.shellHistory === true);
     else setConsentOpen(true);
   }, [startScan, demoMode]);
 
-  /* Error retry: prefer the exact roots of the failed attempt, then stored consent. */
+  /* Error retry: prefer the exact scope of the failed attempt, then stored consent. */
   const retry = useCallback(() => {
-    const roots = lastRootsRef.current || (loadConsent() || {}).roots || null;
-    if (roots && roots.length) startScan(roots);
+    const last = lastScanRef.current;
+    if (last && last.roots && last.roots.length) { startScan(last.roots, last.shellHistory); return; }
+    const c = loadConsent();
+    if (c) startScan(c.roots, c.shellHistory === true);
     else setConsentOpen(true);
   }, [startScan]);
 
@@ -1211,7 +1430,23 @@ function App() {
   }, [phase, finishScan]);
 
   const automate = useCallback(async finding => {
-    if (demoMode) { setDemoModal(true); return; } // sample data has no briefs to draft
+    if (demoMode) {
+      // Demo drafts complete the loop client-side: a short drafting interstitial,
+      // then a sample brief rendered in the browser. No network calls.
+      setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), status: 'drafting', error: null } }));
+      setTimeout(() => {
+        setAutoMap(m => ({
+          ...m,
+          [finding.id]: {
+            ...(m[finding.id] || {}),
+            status: 'briefed',
+            brief: renderDemoBrief(finding),
+            briefPath: DEMO_PLAYBOOKS + finding.id + '/BRIEF.md',
+          },
+        }));
+      }, 250);
+      return;
+    }
     setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), status: 'drafting', error: null } }));
     try {
       const r = await fetchJSON('/api/automate', {
@@ -1229,9 +1464,61 @@ function App() {
     }
   }, [demoMode]);
 
+  /* Score loop: mark a receipt automated/dismissed, or undo back to idle. The
+     server recomputes the score; the topbar animates to the returned numbers.
+     Demo mode runs the identical math client-side — never POSTs. */
+  const setFindingStatus = useCallback(async (finding, status) => {
+    if (demoMode) {
+      const next = {
+        ...autoMap,
+        [finding.id]: { ...(autoMap[finding.id] || {}), status, statusError: null, statusPending: false },
+      };
+      setAutoMap(next);
+      const statusById = {};
+      Object.keys(next).forEach(id => { statusById[id] = next[id].status; });
+      setScan(s => (s ? { ...s, score: { ...s.score, ...recomputeScoreFrom(s, statusById) } } : s));
+      return;
+    }
+    setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), statusPending: true, statusError: null } }));
+    try {
+      const r = await fetchJSON('/api/finding-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ findingId: finding.id, status }),
+      });
+      if (!r.ok) throw new Error((r.body && r.body.error) || ('server answered ' + r.status));
+      const a = (r.body.finding && r.body.finding.automation) || {};
+      const st = ['briefed', 'automated', 'dismissed'].indexOf(a.status) !== -1 ? a.status : 'idle';
+      setAutoMap(m => ({
+        ...m,
+        [finding.id]: {
+          ...(m[finding.id] || {}),
+          status: st,
+          briefPath: a.briefPath || (m[finding.id] || {}).briefPath || null,
+          statusPending: false,
+        },
+      }));
+      setScan(s => {
+        if (!s) return s;
+        const fs = (s.findings || []).map(f => (f.id === finding.id ? { ...f, automation: a } : f));
+        return { ...s, findings: fs, score: { ...s.score, ...r.body.score } };
+      });
+    } catch (e) {
+      setAutoMap(m => ({
+        ...m,
+        [finding.id]: {
+          ...(m[finding.id] || {}),
+          statusPending: false,
+          statusError: e.message || 'the local server did not respond',
+        },
+      }));
+    }
+  }, [demoMode, autoMap]);
+
   const viewBrief = useCallback(async finding => {
     const st = autoMap[finding.id] || {};
     let brief = st.brief;
+    if (!brief && demoMode) brief = renderDemoBrief(finding); // demo never fetches
     if (!brief) {
       let r;
       try {
@@ -1247,13 +1534,15 @@ function App() {
       setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), briefError: null } }));
     }
     const briefPath = st.briefPath || (finding.automation && finding.automation.briefPath) || ('playbooks/' + finding.id + '/BRIEF.md');
-    const dir = String(briefPath).replace(/\/?BRIEF\.md$/, '');
+    let dir = String(briefPath).replace(/\/?BRIEF\.md$/, '');
+    if (demoMode) dir = homeToTilde(dir); // match the sample brief's own run line
     setBriefModal({
       title: finding.title,
       brief,
       runLine: 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
+      demo: demoMode,
     });
-  }, [autoMap]);
+  }, [autoMap, demoMode]);
 
   // Share card: draw once fonts are in, so the canvas type matches the page.
   useEffect(() => {
@@ -1275,9 +1564,11 @@ function App() {
 
   // The consent panel is reachable from the landing ("Read my machine"), the
   // report topbar ("Folders", and "Rescan" with nothing stored), and error retry.
+  const storedConsent = consentOpen ? (loadConsent() || {}) : {};
   const consentModal = consentOpen ? (
     <ConsentModal
-      storedRoots={(loadConsent() || {}).roots || null}
+      storedRoots={storedConsent.roots || null}
+      storedShell={storedConsent.shellHistory === true}
       onClose={() => setConsentOpen(false)}
       onStart={consentStart}
     />
@@ -1338,7 +1629,9 @@ function App() {
         <main className="scan" aria-live="polite">
           <div className="eyebrow">Reading — {progress.phase || 'walking'}</div>
           {scanRoots.length ? (
-            <div className="scan-roots">{scanRoots.map(d => truncMid(d, 34)).join(' · ')}</div>
+            <div className="scan-roots">
+              {scanRoots.map(d => truncMid(d, 34)).join(' · ') + (scanShell ? ' · shell history' : '')}
+            </div>
           ) : null}
           <div className="scan-count"><TickNumber value={progress.filesSeen || 0} /></div>
           <div className="scan-count-label">files</div>
@@ -1377,16 +1670,28 @@ function App() {
 
   // ---------- report ----------
   const score = (scan && scan.score) || {};
-  const hours = (score.recoverableHoursPerWeek || 0).toFixed(1);
   const empty = findings.length === 0;
+  // Cold receipts sink below active ones: active by hours desc (the memo's
+  // order), then automated, then dismissed. Numbering runs over ACTIVE only.
+  const handledOf = f => {
+    const st = autoMap[f.id];
+    const s = (st && st.status) || (f.automation && f.automation.status);
+    return s === 'automated' || s === 'dismissed' ? s : null;
+  };
+  const activeList = findings.filter(f => !handledOf(f));
+  const coldList = findings.filter(f => handledOf(f) === 'automated')
+    .concat(findings.filter(f => handledOf(f) === 'dismissed'));
+  const allHandled = !empty && activeList.length === 0;
 
   return (
     <div>
       <header className="topbar">
         <span className="wordmark">Latent</span>
         {demoMode ? <span className="chip-demo">DEMO — sample data</span> : null}
-        <span className="topbar-stat">LEVERAGE {score.value != null ? score.value : '—'}<span className="dim">/100</span></span>
-        <span className="topbar-stat"><span className="heat-text">≈{hours} h/wk</span> <span className="dim">by hand, est.</span></span>
+        <TopStats
+          value={score.value != null ? score.value : null}
+          hours={score.recoverableHoursPerWeek || 0}
+        />
         <span className="topbar-spacer"></span>
         <button className="btn btn-ghost" onClick={rescan}>{demoMode ? 'Read my machine' : 'Rescan'}</button>
         {!demoMode ? <button className="btn btn-ghost" onClick={() => setConsentOpen(true)}>Folders</button> : null}
@@ -1401,25 +1706,52 @@ function App() {
         </main>
       ) : (
         <main className="report-main">
-          <div className="report-intro">
-            <h2 className="report-title">{findings.length} receipt{findings.length === 1 ? '' : 's'}, hottest first</h2>
-            <span className="report-sub">
-              {scan.stats ? scan.stats.files.toLocaleString() + ' files · ' + scan.stats.repos + ' repos · read ' : ''}
-              {scan.generatedAt ? new Date(scan.generatedAt).toLocaleString() : ''}
-            </span>
-          </div>
-          {findings.map((f, i) => (
-            <ReceiptCard
-              key={f.id}
-              finding={f}
-              index={i}
-              maxEst={maxEst}
-              stagger={freshReport && !REDUCED_MOTION}
-              autoState={autoMap[f.id] || { status: 'idle' }}
-              onAutomate={automate}
-              onViewBrief={viewBrief}
-            />
-          ))}
+          {allHandled ? (
+            <div className="clean-sheet">
+              <h2 className="state-title">Clean sheet.</h2>
+              <p className="state-body">Rescan when you've shipped more work.</p>
+              <div className="clean-sheet-score">LEVERAGE {score.value != null ? score.value : '—'}/100</div>
+              <button className="btn btn-primary" onClick={rescan}>Rescan</button>
+            </div>
+          ) : (
+            <React.Fragment>
+              <div className="report-intro">
+                <h2 className="report-title">{activeList.length} receipt{activeList.length === 1 ? '' : 's'}, hottest first</h2>
+                <span className="report-sub">
+                  {scan.stats ? scan.stats.files.toLocaleString() + ' files · ' + scan.stats.repos + ' repos · read ' : ''}
+                  {scan.generatedAt ? new Date(scan.generatedAt).toLocaleString() : ''}
+                </span>
+              </div>
+              {activeList.map((f, i) => (
+                <ReceiptCard
+                  key={f.id}
+                  finding={f}
+                  index={i}
+                  maxEst={maxEst}
+                  stagger={freshReport && !REDUCED_MOTION}
+                  autoState={autoMap[f.id] || { status: 'idle' }}
+                  onAutomate={automate}
+                  onViewBrief={viewBrief}
+                  onSetStatus={setFindingStatus}
+                />
+              ))}
+            </React.Fragment>
+          )}
+          {coldList.length ? (
+            <React.Fragment>
+              <div className="cold-head">Handled · {coldList.length}</div>
+              {coldList.map(f => (
+                <ColdRow
+                  key={f.id}
+                  finding={f}
+                  status={handledOf(f)}
+                  pending={(autoMap[f.id] || {}).statusPending}
+                  error={(autoMap[f.id] || {}).statusError}
+                  onUndo={f2 => setFindingStatus(f2, 'idle')}
+                />
+              ))}
+            </React.Fragment>
+          ) : null}
         </main>
       )}
 
@@ -1449,6 +1781,12 @@ function App() {
             </React.Fragment>
           }
         >
+          {briefModal.demo ? (
+            <div className="brief-banner">
+              <div>SAMPLE BRIEF — on your machine this is a real file in playbooks/, ready to run.</div>
+              <button className="btn-text quiet" onClick={() => setDemoModal(true)}>Get the real thing</button>
+            </div>
+          ) : null}
           <pre className="brief-pre">{briefModal.brief}</pre>
         </Modal>
       ) : null}

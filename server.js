@@ -1,8 +1,9 @@
 'use strict';
 /*
  * LATENT — server.js
- * node:http server on PORT env || 8820. Serves ./public plus the 5-endpoint
- * API from SPEC.md. Pure Node stdlib. No npm dependencies.
+ * node:http server on PORT env || 8820. Serves ./public plus the API from
+ * SPEC.md (and /api/roots, /api/finding-status). Pure Node stdlib. No npm
+ * dependencies.
  *
  * Module-system note (constrained): scanner.js is authored separately and may
  * land as either CJS or ESM, and a package.json {"type":"module"} may or may
@@ -168,6 +169,9 @@
           for (const f of scan.findings) {
             if (kept.has(f.id)) f.automation = kept.get(f.id);
           }
+          // Carried-forward automated/dismissed findings must not count toward
+          // the fresh score — the server recompute owns the live number.
+          if (kept.size) recomputeScore(scan);
         } catch (e) { /* no previous scan or unreadable — nothing to carry */ }
         await writeFileAtomic(SCAN_PATH, JSON.stringify(scan, null, 2));
       });
@@ -178,6 +182,22 @@
     } finally {
       running = false;
     }
+  }
+
+  // ---- live score recompute -------------------------------------------------
+  // The scanner's score counts every finding; the live number excludes findings
+  // the user has handled (automated) or set aside (dismissed). Same formula as
+  // the scanner: score = clamp(round(100 - 9*hours), 4, 96).
+  function recomputeScore(scan) {
+    const hours = (scan.findings || []).reduce((sum, f) => {
+      const st = f.automation && f.automation.status;
+      if (st === 'automated' || st === 'dismissed') return sum;
+      return sum + ((f.metrics && f.metrics.estHoursPerWeek) || 0);
+    }, 0);
+    scan.score = scan.score || {};
+    scan.score.value = Math.min(96, Math.max(4, Math.round(100 - 9 * hours)));
+    scan.score.recoverableHoursPerWeek = Math.round(hours * 10) / 10;
+    return scan.score;
   }
 
   // ---- BRIEF.md rendering (SPEC template) -----------------------------------
@@ -329,6 +349,49 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     sendJSON(res, result.status, result.body);
   }
 
+  // POST /api/finding-status {findingId, status} — the score loop. Marking a
+  // finding automated/dismissed removes its hours from the live score; idle
+  // (undo) puts them back. briefPath is preserved either way.
+  const FINDING_STATUSES = ['automated', 'dismissed', 'idle'];
+  async function apiPostFindingStatus(req, res) {
+    const raw = await readBody(req);
+    let body;
+    try { body = raw.trim() ? JSON.parse(raw) : {}; } catch (_e) {
+      return sendJSON(res, 400, { error: 'invalid JSON body' });
+    }
+    const findingId = body && body.findingId;
+    const status = body && body.status;
+    if (typeof findingId !== 'string' || !findingId) {
+      return sendJSON(res, 400, { error: 'findingId required' });
+    }
+    if (FINDING_STATUSES.indexOf(status) === -1) {
+      return sendJSON(res, 400, { error: "status must be 'automated', 'dismissed' or 'idle'" });
+    }
+
+    const result = await withScanJsonLock(async () => {
+      let scan;
+      try {
+        scan = JSON.parse(await fsp.readFile(SCAN_PATH, 'utf8'));
+      } catch (err) {
+        if (err.code === 'ENOENT') return { status: 404, body: { error: 'no scan yet' } };
+        return { status: 500, body: { error: 'scan.json is unreadable' } };
+      }
+
+      const finding = (scan.findings || []).find((f) => f.id === findingId);
+      if (!finding) return { status: 404, body: { error: 'unknown finding id' } };
+      if (!SAFE_ID.test(finding.id)) {
+        return { status: 400, body: { error: 'finding id contains unsafe characters' } };
+      }
+
+      finding.automation = finding.automation || {};
+      finding.automation.status = status; // briefPath (and kind/title) preserved
+      const score = recomputeScore(scan);
+      await writeFileAtomic(SCAN_PATH, JSON.stringify(scan, null, 2));
+      return { status: 200, body: { score, finding } };
+    });
+    sendJSON(res, result.status, result.body);
+  }
+
   async function apiGetBrief(req, res, u) {
     const id = u.searchParams.get('id');
     if (!id) return sendJSON(res, 400, { error: 'id required' });
@@ -417,6 +480,10 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     }
     if (p === '/api/brief') {
       if (req.method === 'GET') return apiGetBrief(req, res, u);
+      return sendJSON(res, 405, { error: 'method not allowed' });
+    }
+    if (p === '/api/finding-status') {
+      if (req.method === 'POST') return apiPostFindingStatus(req, res);
       return sendJSON(res, 405, { error: 'method not allowed' });
     }
     if (p.startsWith('/api/')) return sendJSON(res, 404, { error: 'not found' });

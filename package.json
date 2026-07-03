@@ -9,5 +9,5 @@
     "node": ">=18"
   },
   "repository": "github:AbhinavGGarg/latent",
-  "license": "MIT"
+  "license": "FSL-1.1-MIT"
 }

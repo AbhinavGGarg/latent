@@ -60,6 +60,12 @@ that's your call and your flag to add; the default stays scoped.
 100% local. No network calls, no telemetry, no accounts. The scan, the report, the briefs —
 nothing leaves this machine. Delete `scan.json` and `playbooks/` and it's like it never ran.
 
+## License
+
+[FSL-1.1-MIT](LICENSE) (Functional Source License — the one Sentry uses). Read it, run it,
+verify every privacy claim yourself. Building a competing commercial product with it is
+not permitted; each release becomes plain MIT two years after it ships.
+
 ## How the score works
 
 `score = clamp(round(100 − 9 × hours), 4, 96)` where hours is the sum of per-finding

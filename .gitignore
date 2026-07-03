@@ -4,3 +4,4 @@ playbooks/
 run.log
 .DS_Store
 node_modules/
+.vercel
