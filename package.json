@@ -1,13 +1,32 @@
 {
   "name": "latent-scan",
   "version": "0.1.0",
-  "description": "Read your machine. Get receipts.",
+  "description": "Read your machine locally and get receipts for the work AI can already do.",
+  "keywords": [
+    "automation",
+    "ai",
+    "agents",
+    "cli",
+    "productivity",
+    "local-first",
+    "developer-tools"
+  ],
+  "homepage": "https://latent-rust.vercel.app",
+  "repository": "github:AbhinavGGarg/latent",
+  "license": "SEE LICENSE IN LICENSE",
   "bin": {
     "latent": "./cli.js"
   },
   "engines": {
     "node": ">=18"
   },
-  "repository": "github:AbhinavGGarg/latent",
-  "license": "FSL-1.1-MIT"
+  "files": [
+    "cli.js",
+    "server.js",
+    "scanner.js",
+    "public/",
+    "SPEC.md",
+    "README.md",
+    "LICENSE"
+  ]
 }
