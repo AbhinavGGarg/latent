@@ -475,9 +475,10 @@ Run it: \`${run}\`
           item.reason = 'could not start the agent (' + (e.message || e) + ')';
           return done();
         }
-        let errTail = '';
-        child.stderr.on('data', (b) => { errTail = (errTail + b.toString()).slice(-400); });
-        child.stdout.on('data', () => {});
+        let outTail = '';
+        const cap = (b) => { outTail = (outTail + b.toString()).slice(-800); };
+        child.stderr.on('data', cap);
+        child.stdout.on('data', cap);
         const timer = setTimeout(() => {
           item.status = 'failed';
           item.reason = 'the run hit the 15-minute cap and was stopped';
@@ -496,8 +497,16 @@ Run it: \`${run}\`
           clearTimeout(timer);
           if (item.status === 'awaiting' && code !== 0) {
             item.status = 'failed';
-            item.reason = 'agent exited ' + code + (errTail ? ' — ' + errTail.trim().slice(-200) : '') +
-              '. Run it yourself: ' + runner.runLine(runDir);
+            const low = outTail.toLowerCase();
+            if (low.includes('not logged in') || low.includes('/login') || low.includes('authentication') || low.includes('unauthorized')) {
+              const name = runner.id === 'claude' ? 'Claude Code' : runner.id;
+              item.reason = name + ' is installed but not logged in for headless use. Open a terminal, run ' +
+                shq(resolvedBin.bin) + ' once and log in (Claude: type /login), then this will work. ' +
+                'Or set ANTHROPIC_API_KEY. Then rerun: ' + runner.runLine(runDir, resolvedBin.bin);
+            } else {
+              item.reason = 'agent exited ' + code + (outTail ? ' — ' + outTail.trim().slice(-220) : '') +
+                '. Run it yourself: ' + runner.runLine(runDir, resolvedBin.bin);
+            }
           }
           done();
         });

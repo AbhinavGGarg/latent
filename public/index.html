@@ -2249,7 +2249,10 @@ function App() {
                 </div>
               ) : null}
               {!briefModal.demo ? (
-                <span className="report-sub">Open a new terminal tab (⌘T) — this one is running Latent — and paste:</span>
+                <span className="report-sub">
+                  Open a new terminal tab (⌘T) — this one is running Latent — and paste. First time with
+                  this agent, make sure it's logged in for headless use (Claude: run it once and type /login).
+                </span>
               ) : null}
               <div className="brief-footer-row">
                 {briefModal.demo ? <span className="report-sub">Get your own briefs:</span> : null}
