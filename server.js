@@ -251,6 +251,42 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
   }
 
   // ==========================================================================
+  // AGENT RUNNERS — Latent is a dispatcher, not an agent. Any agent CLI works;
+  // we detect what's installed and adapt every command to it.
+  // ==========================================================================
+  const RUNNERS = [
+    { id: 'claude', bin: 'claude', args: (brief) => ['-p', brief, '--permission-mode', 'acceptEdits'],
+      runLine: (dir) => 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"' },
+    { id: 'codex', bin: 'codex', args: (brief) => ['exec', brief],
+      runLine: (dir) => 'cd ' + dir + ' && codex exec "$(cat BRIEF.md)"' },
+    { id: 'gemini', bin: 'gemini', args: (brief) => ['-p', brief],
+      runLine: (dir) => 'cd ' + dir + ' && gemini -p "$(cat BRIEF.md)"' },
+  ];
+  let runnersCache = null; // { detected: ['claude',...], preferred: 'claude'|null }
+  async function detectRunners(force) {
+    if (runnersCache && !force) return runnersCache;
+    const cp = await import('node:child_process');
+    const which = process.platform === 'win32' ? 'where' : 'which';
+    const detected = [];
+    for (const r of RUNNERS) {
+      const ok = await new Promise((resolve) => {
+        try {
+          cp.execFile(which, [r.bin], { timeout: 2000 }, (err) => resolve(!err));
+        } catch (e) { resolve(false); }
+      });
+      if (ok) detected.push(r.id);
+    }
+    runnersCache = { detected, preferred: detected[0] || null };
+    return runnersCache;
+  }
+  function runnerById(id) { return RUNNERS.find((r) => r.id === id) || null; }
+
+  async function apiGetEnv(req, res) {
+    const runners = await detectRunners(false);
+    sendJSON(res, 200, { runners: runners.detected, preferred: runners.preferred, platform: process.platform });
+  }
+
+  // ==========================================================================
   // OVERNIGHT — standing tasks, inbox, ledger (docs/OVERNIGHT.md is the contract)
   // ==========================================================================
   const TASKS_PATH = path.join(BASE, 'tasks.json');
@@ -328,12 +364,20 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
       await writePlaybookSettings(runDir);
 
       const cp = await import('node:child_process');
+      const detected = await detectRunners(false);
+      const runner = runnerById(detected.preferred);
+      if (!runner) {
+        item.status = 'failed';
+        item.reason = 'no agent CLI found (looked for claude, codex, gemini). Install one, or run the brief ' +
+          'yourself: copy ' + path.join(runDir, 'BRIEF.md') + ' into any AI assistant.';
+        throw Object.assign(new Error('no runner'), { handled: true });
+      }
       await new Promise((resolve) => {
         let settled = false;
         const done = () => { if (!settled) { settled = true; resolve(); } };
         let child;
         try {
-          child = cp.spawn('claude', ['-p', brief, '--permission-mode', 'acceptEdits'], {
+          child = cp.spawn(runner.bin, runner.args(brief), {
             cwd: runDir, stdio: ['ignore', 'pipe', 'pipe'], env: process.env,
           });
         } catch (e) {
@@ -354,7 +398,7 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
           clearTimeout(timer);
           item.status = 'failed';
           item.reason = e.code === 'ENOENT'
-            ? 'the claude CLI is not installed or not on PATH for the watcher'
+            ? 'the agent CLI vanished from PATH mid-run — restart the watcher'
             : ('agent error: ' + (e.message || e));
           done();
         });
@@ -363,7 +407,7 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
           if (item.status === 'awaiting' && code !== 0) {
             item.status = 'failed';
             item.reason = 'agent exited ' + code + (errTail ? ' — ' + errTail.trim().slice(-200) : '') +
-              '. Run it yourself: cd ' + runDir + ' && claude -p "$(cat BRIEF.md)"';
+              '. Run it yourself: ' + runner.runLine(runDir);
           }
           done();
         });
@@ -397,8 +441,10 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
         await creditLedger(task.title, item.hoursCredit);
       }
     } catch (e) {
-      item.status = 'failed';
-      item.reason = 'runner error: ' + (e.message || e);
+      if (!(e && e.handled)) {
+        item.status = 'failed';
+        item.reason = 'runner error: ' + (e.message || e);
+      }
     } finally {
       runningTasks.delete(task.id);
     }
@@ -781,6 +827,10 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     }
     if (p === '/api/progress') {
       if (req.method === 'GET') return apiGetProgress(req, res);
+      return sendJSON(res, 405, { error: 'method not allowed' });
+    }
+    if (p === '/api/env') {
+      if (req.method === 'GET') return apiGetEnv(req, res);
       return sendJSON(res, 405, { error: 'method not allowed' });
     }
     if (p === '/api/tasks') {

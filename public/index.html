@@ -1279,6 +1279,7 @@ function ConsentModal({ storedRoots, storedShell, onClose, onStart }) {
         <li>first lines of .md/.txt/.csv under 200KB · git history, read-only</li>
         {shell ? <li>command names from shell history — never their arguments</li> : null}
         <li>only the folders selected above · nothing leaves this machine</li>
+        <li>macOS may ask you to allow folder access — that's the OS confirming what you chose here</li>
       </ul>
 
       <label className="consent-agree">
@@ -1469,9 +1470,15 @@ function InboxView({ items, onAct, autoOffer, onAutoDecide, watchOn, tasksCount 
 }
 
 /* Tasks: every standing playbook, inspectable — view, pause, run, delete. */
-function TasksView({ tasks, onAct, watchOn }) {
+function TasksView({ tasks, onAct, watchOn, agentEnv }) {
   return (
     <main className="report-main">
+      {agentEnv && !agentEnv.preferred && tasks.length > 0 ? (
+        <div className="watch-hint">
+          No agent CLI found on this machine — runs will fail until one is installed
+          (claude, codex, or gemini). Briefs still draft; you can run them in any AI assistant.
+        </div>
+      ) : null}
       {!watchOn && tasks.length > 0 ? (
         <div className="watch-hint">
           The watcher is off — schedules are armed but nothing runs until you start it:{' '}
@@ -1528,6 +1535,7 @@ function App() {
   const [watchOn, setWatchOn] = useState(false);
   const [armMap, setArmMap] = useState({});               // findingId -> {taskId|pending|error}
   const [autoOffer, setAutoOffer] = useState(null);       // {taskId, title, approvals}
+  const [agentEnv, setAgentEnv] = useState(null);          // {runners:[], preferred:string|null}
   const [consentOpen, setConsentOpen] = useState(false); // the gate: every scan starts here
   const [scanRoots, setScanRoots] = useState([]);        // display strings for the scanning sub-line
   const [scanShell, setScanShell] = useState(false);     // shell history included in the running scan
@@ -1799,9 +1807,10 @@ function App() {
   const loadOvernight = useCallback(async () => {
     if (demoMode) return;
     try {
-      const [t, i, l] = await Promise.all([
-        fetchJSON('/api/tasks'), fetchJSON('/api/inbox'), fetchJSON('/api/ledger'),
+      const [t, i, l, e] = await Promise.all([
+        fetchJSON('/api/tasks'), fetchJSON('/api/inbox'), fetchJSON('/api/ledger'), fetchJSON('/api/env'),
       ]);
+      if (e.ok && e.body) setAgentEnv(e.body);
       if (t.ok && t.body) { setTasks(t.body.tasks || []); setWatchOn(!!t.body.watch); }
       if (i.ok && i.body) setInbox(i.body.items || []);
       if (l.ok && l.body) setLedger(l.body);
@@ -1895,15 +1904,21 @@ function App() {
     }
     const briefPath = st.briefPath || (finding.automation && finding.automation.briefPath) || ('playbooks/' + finding.id + '/BRIEF.md');
     const dir = String(briefPath).replace(/\/?BRIEF\.md$/, '');
-    // Demo: never surface a copyable command with a fictional path — the only
-    // command a demo visitor can actually run is the installer.
+    // Latent is a dispatcher: the run command adapts to whichever agent CLI this
+    // machine has. None found -> no fake command; the brief itself is the artifact.
+    const RUN_LINES = {
+      claude: 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
+      codex: 'cd ' + dir + ' && codex exec "$(cat BRIEF.md)"',
+      gemini: 'cd ' + dir + ' && gemini -p "$(cat BRIEF.md)"',
+    };
+    const preferred = agentEnv && agentEnv.preferred;
     setBriefModal({
       title: finding.title,
       brief,
-      runLine: demoMode ? INSTALL_CMD : 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
+      runLine: demoMode ? INSTALL_CMD : (preferred ? RUN_LINES[preferred] : null),
       demo: demoMode,
     });
-  }, [autoMap, demoMode]);
+  }, [autoMap, demoMode, agentEnv]);
 
   // Share card: draw once fonts are in, so the canvas type matches the page.
   useEffect(() => {
@@ -2072,7 +2087,7 @@ function App() {
       {view === 'inbox' && !demoMode ? (
         <InboxView items={inbox} onAct={inboxAct} autoOffer={autoOffer} onAutoDecide={autoDecide} watchOn={watchOn} tasksCount={tasks.length} />
       ) : view === 'tasks' && !demoMode ? (
-        <TasksView tasks={tasks} onAct={taskAct} watchOn={watchOn} />
+        <TasksView tasks={tasks} onAct={taskAct} watchOn={watchOn} agentEnv={agentEnv} />
       ) : empty ? (
         <main className="state-card">
           <h1 className="state-title">Clean read.</h1>
@@ -2155,11 +2170,21 @@ function App() {
           title={briefModal.title}
           onClose={() => setBriefModal(null)}
           footer={
-            <React.Fragment>
-              {briefModal.demo ? <span className="report-sub">Get your own briefs:</span> : null}
-              <code className="run-line">{briefModal.runLine}</code>
-              <CopyButton text={briefModal.runLine} label={briefModal.demo ? 'Copy install command' : 'Copy run command'} />
-            </React.Fragment>
+            briefModal.runLine ? (
+              <React.Fragment>
+                {briefModal.demo ? <span className="report-sub">Get your own briefs:</span> : null}
+                <code className="run-line">{briefModal.runLine}</code>
+                <CopyButton text={briefModal.runLine} label={briefModal.demo ? 'Copy install command' : 'Copy run command'} />
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                <span className="report-sub">
+                  No agent CLI found (claude, codex, or gemini). The brief is just instructions —
+                  copy it into any AI assistant.
+                </span>
+                <CopyButton text={briefModal.brief} label="Copy the brief" />
+              </React.Fragment>
+            )
           }
         >
           {briefModal.demo ? (

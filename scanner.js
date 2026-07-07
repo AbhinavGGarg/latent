@@ -1295,14 +1295,39 @@ function duKb(dirPath, stats) {
         'du', ['-sk', dirPath],
         { timeout: 3000, maxBuffer: 1024 * 1024, windowsHide: true },
         (err, stdout) => {
-          if (err) { stats.skipped++; return done(null); }
+          if (err) return done(nodeSizeKb(dirPath, stats)); // no du (Windows) -> pure-Node walk
           const kb = parseInt(String(stdout), 10);
-          if (!Number.isFinite(kb)) { stats.skipped++; return done(null); }
+          if (!Number.isFinite(kb)) return done(nodeSizeKb(dirPath, stats));
           done(kb);
         }
       );
-    } catch (e) { stats.skipped++; done(null); }
+    } catch (e) { done(nodeSizeKb(dirPath, stats)); }
   });
+}
+
+// Pure-Node fallback when `du` is unavailable (Windows) or fails: a bounded
+// recursive size sum. Capped at 30k entries per dir so a monster node_modules
+// costs bounded time; past the cap the partial sum is an honest UNDER-count.
+function nodeSizeKb(dirPath, stats) {
+  let bytes = 0, entries = 0;
+  const stack = [dirPath];
+  try {
+    while (stack.length) {
+      const dir = stack.pop();
+      let ents;
+      try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { continue; }
+      for (const ent of ents) {
+        if (++entries > 30000) return Math.round(bytes / 1024);
+        const full = path.join(dir, ent.name);
+        if (ent.isSymbolicLink()) continue;
+        if (ent.isDirectory()) { stack.push(full); continue; }
+        if (ent.isFile()) {
+          try { bytes += fs.lstatSync(full).size; } catch (e) { /* skip */ }
+        }
+      }
+    }
+    return Math.round(bytes / 1024);
+  } catch (e) { stats.skipped++; return null; }
 }
 
 async function detectNodeModulesGraveyard(ctx) {
