@@ -95,6 +95,10 @@ button { font: inherit; color: inherit; }
 .btn-text.quiet { color: var(--ash); }
 .btn-text.quiet:hover:not(:disabled) { color: var(--bone); }
 
+.brief-footer { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.brief-footer-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brief-footer-alt { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--seam); }
+
 /* demo marker — quiet, never heat/glacier */
 .chip-demo {
   display: inline-flex; align-items: center;
@@ -1915,7 +1919,10 @@ function App() {
     setBriefModal({
       title: finding.title,
       brief,
-      runLine: demoMode ? INSTALL_CMD : (preferred ? RUN_LINES[preferred] : null),
+      // Detected runner wins; otherwise default to claude so a missed detection
+      // never hides a command the user can actually run.
+      runLine: demoMode ? INSTALL_CMD : (RUN_LINES[preferred] || RUN_LINES.claude),
+      detected: !!preferred,
       demo: demoMode,
     });
   }, [autoMap, demoMode, agentEnv]);
@@ -2170,21 +2177,22 @@ function App() {
           title={briefModal.title}
           onClose={() => setBriefModal(null)}
           footer={
-            briefModal.runLine ? (
-              <React.Fragment>
+            <div className="brief-footer">
+              <div className="brief-footer-row">
                 {briefModal.demo ? <span className="report-sub">Get your own briefs:</span> : null}
                 <code className="run-line">{briefModal.runLine}</code>
                 <CopyButton text={briefModal.runLine} label={briefModal.demo ? 'Copy install command' : 'Copy run command'} />
-              </React.Fragment>
-            ) : (
-              <React.Fragment>
-                <span className="report-sub">
-                  No agent CLI found (claude, codex, or gemini). The brief is just instructions —
-                  copy it into any AI assistant.
-                </span>
-                <CopyButton text={briefModal.brief} label="Copy the brief" />
-              </React.Fragment>
-            )
+              </div>
+              {!briefModal.demo && !briefModal.detected ? (
+                <div className="brief-footer-alt">
+                  <span className="report-sub">
+                    Have Claude Code? Paste the command above in your terminal. On a different agent
+                    (Codex, Gemini) or none, copy the brief into any AI assistant instead:
+                  </span>
+                  <CopyButton text={briefModal.brief} label="Copy the brief" />
+                </div>
+              ) : null}
+            </div>
           }
         >
           {briefModal.demo ? (

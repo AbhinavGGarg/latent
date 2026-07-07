@@ -262,28 +262,77 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     { id: 'gemini', bin: 'gemini', args: (brief) => ['-p', brief],
       runLine: (dir) => 'cd ' + dir + ' && gemini -p "$(cat BRIEF.md)"' },
   ];
-  let runnersCache = null; // { detected: ['claude',...], preferred: 'claude'|null }
+  // Common install locations, checked in addition to PATH — because a process
+  // spawned by npx/a GUI often gets a stripped PATH that omits ~/.local/bin,
+  // Homebrew, pnpm, and npm-global (exactly where these CLIs live). Detection
+  // that only trusts PATH false-negatives for a huge share of real users.
+  async function extraBinDirs() {
+    const os = await import('node:os');
+    const home = os.homedir();
+    return [
+      path.join(home, '.local', 'bin'),
+      path.join(home, '.claude', 'local'),
+      '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin',
+      path.join(home, 'Library', 'pnpm'),
+      path.join(home, '.npm-global', 'bin'),
+      path.join(home, '.bun', 'bin'),
+    ];
+  }
+  // A PATH that includes the extras, for both detection and spawning the runner.
+  let augmentedPathP = null;
+  async function augmentedPath() {
+    if (!augmentedPathP) {
+      augmentedPathP = (async () => {
+        const dirs = await extraBinDirs();
+        const sep = process.platform === 'win32' ? ';' : ':';
+        const cur = (process.env.PATH || '').split(sep);
+        const merged = cur.concat(dirs.filter((d) => cur.indexOf(d) === -1));
+        return merged.join(sep);
+      })();
+    }
+    return augmentedPathP;
+  }
+
+  let runnersCache = null; // { detected:[{id,bin}], preferred:'claude'|null }
   async function detectRunners(force) {
     if (runnersCache && !force) return runnersCache;
     const cp = await import('node:child_process');
     const which = process.platform === 'win32' ? 'where' : 'which';
+    const PATH = await augmentedPath();
+    const dirs = await extraBinDirs();
+    const ext = process.platform === 'win32' ? ['.cmd', '.exe', '.bat', ''] : [''];
     const detected = [];
     for (const r of RUNNERS) {
-      const ok = await new Promise((resolve) => {
+      let bin = null;
+      // 1) PATH lookup (augmented), the fast common case.
+      const viaPath = await new Promise((resolve) => {
         try {
-          cp.execFile(which, [r.bin], { timeout: 2000 }, (err) => resolve(!err));
-        } catch (e) { resolve(false); }
+          cp.execFile(which, [r.bin], { timeout: 2500, env: Object.assign({}, process.env, { PATH }) },
+            (err, out) => resolve(!err && out ? String(out).split(/\r?\n/)[0].trim() : null));
+        } catch (e) { resolve(null); }
       });
-      if (ok) detected.push(r.id);
+      if (viaPath) bin = viaPath;
+      // 2) Probe real install locations by absolute path (survives a stripped PATH).
+      if (!bin) {
+        for (const d of dirs) {
+          for (const e of ext) {
+            const cand = path.join(d, r.bin + e);
+            const ok = await fsp.access(cand, (await import('node:fs')).constants.X_OK).then(() => true, () => false);
+            if (ok) { bin = cand; break; }
+          }
+          if (bin) break;
+        }
+      }
+      if (bin) detected.push({ id: r.id, bin });
     }
-    runnersCache = { detected, preferred: detected[0] || null };
+    runnersCache = { detected, preferred: detected[0] ? detected[0].id : null, path: PATH };
     return runnersCache;
   }
   function runnerById(id) { return RUNNERS.find((r) => r.id === id) || null; }
 
   async function apiGetEnv(req, res) {
-    const runners = await detectRunners(false);
-    sendJSON(res, 200, { runners: runners.detected, preferred: runners.preferred, platform: process.platform });
+    const r = await detectRunners(false);
+    sendJSON(res, 200, { runners: r.detected.map((x) => x.id), preferred: r.preferred, platform: process.platform });
   }
 
   // ==========================================================================
@@ -366,10 +415,12 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
       const cp = await import('node:child_process');
       const detected = await detectRunners(false);
       const runner = runnerById(detected.preferred);
-      if (!runner) {
+      const resolvedBin = detected.detected.find((x) => x.id === detected.preferred);
+      if (!runner || !resolvedBin) {
         item.status = 'failed';
-        item.reason = 'no agent CLI found (looked for claude, codex, gemini). Install one, or run the brief ' +
-          'yourself: copy ' + path.join(runDir, 'BRIEF.md') + ' into any AI assistant.';
+        item.reason = 'no agent CLI found (looked for claude, codex, gemini on PATH and in the usual ' +
+          'install locations). Install one, or run the brief yourself: copy ' + path.join(runDir, 'BRIEF.md') +
+          ' into any AI assistant.';
         throw Object.assign(new Error('no runner'), { handled: true });
       }
       await new Promise((resolve) => {
@@ -377,8 +428,9 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
         const done = () => { if (!settled) { settled = true; resolve(); } };
         let child;
         try {
-          child = cp.spawn(runner.bin, runner.args(brief), {
-            cwd: runDir, stdio: ['ignore', 'pipe', 'pipe'], env: process.env,
+          child = cp.spawn(resolvedBin.bin, runner.args(brief), {
+            cwd: runDir, stdio: ['ignore', 'pipe', 'pipe'],
+            env: Object.assign({}, process.env, { PATH: detected.path }),
           });
         } catch (e) {
           item.status = 'failed';
