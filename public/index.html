@@ -279,6 +279,31 @@ button { font: inherit; color: inherit; }
 
 .report-main { max-width: 880px; margin: 0 auto; padding: 44px 24px 20px; }
 .report-intro { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 26px; }
+
+/* the roast — the machine gets one sentence, then shows its work */
+.roast {
+  font: 400 14px/1.65 var(--font-mono);
+  color: var(--bone);
+  border-left: 2px solid var(--ember);
+  padding-left: 14px;
+  margin-bottom: 30px;
+  max-width: 64ch;
+  overflow-wrap: anywhere;
+}
+.roast-dim { color: var(--ash); }
+
+/* tier: identity label beside the score — same ink, quieter weight */
+.tier { color: var(--bone); font-weight: 700; letter-spacing: 0.06em; }
+
+/* reveal: the annual line lands after the count-up */
+.reveal-annual {
+  font: 500 clamp(17px, 2.4vw, 24px) var(--font-mono);
+  letter-spacing: 0.02em;
+  background: var(--heat);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 .report-title { font: 700 22px/1.2 var(--font-display); letter-spacing: -0.01em; }
 .report-sub { font: 400 12px var(--font-mono); color: var(--ash); letter-spacing: 0.05em; }
 
@@ -567,6 +592,10 @@ const DETECTOR_FORMULAS = [
   ['commit-drudgery',    'generic-message rate × commits/wk × 2 min · cap 0.5 h/wk'],
   ['csv-report-assembly','same as dated-recurrence, on CSV series · cap 2.0 h/wk'],
   ['scaffold-repetition','35 min one-shot ÷ 8 wk · cap 0.7 h/wk'],
+  ['shell-rituals',      'rituals: occurrences/wk × length × 20 s · cap 1.5 h/wk — aliases: occurrences/wk × 15 s · cap 0.5 h/wk'],
+  ['node-modules-graveyard','20 min one-shot ÷ 8 wk · cap 0.3 h/wk (the GB total is measured, not estimated)'],
+  ['unpushed-work',      '10 min one-shot ÷ 8 wk · cap 0.2 h/wk'],
+  ['fossil-todos',       'marker count × 1 min ÷ 8 wk · cap 0.4 h/wk (age claimed only from file mtime)'],
 ];
 
 /* ---------- helpers ---------- */
@@ -582,6 +611,50 @@ function truncMid(s, max) {
 
 function homeToTilde(p) {
   return String(p || '').replace(/^\/(Users|home)\/[^/]+/, '~');
+}
+
+/* Score tiers: an identity is more shareable than a digit. Bands are fixed. */
+function tierOf(score) {
+  if (score == null) return null;
+  if (score < 40) return 'ARTISAN';
+  if (score < 65) return 'OPERATOR';
+  if (score < 85) return 'AUTOMATOR';
+  return 'GHOST';
+}
+
+/* Annualize the weekly estimate: same math, same "estimated" label, honest unit
+   people actually feel. 2.3 h/wk reads as noise; three work-weeks a year does not. */
+function workWeeksLine(hoursPerWeek) {
+  const ww = (hoursPerWeek * 52) / 40;
+  if (ww < 0.75) return null; // no drama for tiny numbers
+  const n = ww >= 10 ? Math.round(ww) : Math.round(ww * 10) / 10;
+  return '≈ ' + n + ' work-week' + (n === 1 ? '' : 's') + ' a year, estimated';
+}
+
+/* The roast: one plain sentence from the hottest active receipt. */
+function roastLine(findings) {
+  const f = findings && findings[0];
+  if (!f) return null;
+  const m = f.metrics || {};
+  const T = {
+    'shell-rituals': () => 'you typed the same ritual ' + m.count + ' times. It kept count.',
+    'dated-recurrence': () => 'you rebuilt the same file ' + m.count + ' times, on a schedule, by hand.',
+    'version-chains': () => 'you saved ' + m.count + ' hand-made copies of one file.',
+    'near-duplicate-text': () => m.count + ' of your documents are the same document, retyped.',
+    'untested-repos': () => m.count + ' of your repos have never met a test.',
+    'undocumented-repos': () => m.count + ' of your repos ship with no README.',
+    'downloads-entropy': () => m.count + ' loose files are living in your Downloads.',
+    'screenshot-pileup': () => m.count + ' screenshots are waiting to be filed.',
+    'commit-drudgery': () => 'your git history mostly says "fix". It saw everything.',
+    'csv-report-assembly': () => 'you assembled the same table ' + m.count + ' times by hand.',
+    'scaffold-repetition': () => 'you built the same project skeleton ' + m.count + ' times.',
+    'node-modules-graveyard': () => (m.totalGB ? m.totalGB + ' GB of node_modules belong to projects you abandoned.' : 'dead projects are hoarding your disk.'),
+    'unpushed-work': () => 'some of your work exists nowhere but this laptop.',
+    'fossil-todos': () => m.count + ' TODOs are fossilizing in your code.',
+  };
+  const make = T[f.detector];
+  const clause = make ? make() : (f.summary ? f.summary.charAt(0).toLowerCase() + f.summary.slice(1) : null);
+  return clause ? 'Your machine says: ' + clause : null;
 }
 
 function detectorLabel(d) {
@@ -633,40 +706,80 @@ function drawShareCard(canvas, scan) {
   ctx.lineWidth = 2;
   ctx.strokeRect(28, 28, W - 56, H - 56);
 
-  // wordmark
+  const score = (scan.score && scan.score.value) != null ? scan.score.value : null;
+  const hoursNum = (scan.score && scan.score.recoverableHoursPerWeek) || 0;
+  const tier = tierOf(score);
+
+  // wordmark left · tier right
   try { ctx.letterSpacing = '9px'; } catch (e) {}
   ctx.fillStyle = '#EDE6DC';
   ctx.font = '800 24px "Bricolage Grotesque", "Archivo", sans-serif';
   ctx.fillText('LATENT', 72, 104);
+  if (tier) {
+    ctx.textAlign = 'right';
+    ctx.font = '700 24px "IBM Plex Mono", monospace';
+    ctx.fillText(tier, W - 72, 104);
+    ctx.textAlign = 'left';
+  }
   try { ctx.letterSpacing = '0px'; } catch (e) {}
 
   // THE number — heat gradient, data only
-  const hours = ((scan.score && scan.score.recoverableHoursPerWeek) || 0).toFixed(1);
-  ctx.font = '800 216px "Bricolage Grotesque", "Archivo", sans-serif';
+  const hours = hoursNum.toFixed(1);
+  ctx.font = '800 200px "Bricolage Grotesque", "Archivo", sans-serif';
   const numW = ctx.measureText(hours).width;
   const grad = ctx.createLinearGradient(72, 0, 72 + Math.max(numW, 10), 0);
   grad.addColorStop(0, '#FF7A1A');
   grad.addColorStop(1, '#FF3D5E');
   ctx.fillStyle = grad;
-  ctx.fillText(hours, 68, 372);
+  ctx.fillText(hours, 68, 348);
 
   ctx.fillStyle = '#9C8F80';
   ctx.font = '400 21px "IBM Plex Mono", monospace';
-  ctx.fillText('hours/week done by hand that AI can already do', 74, 424);
+  ctx.fillText('hours/week done by hand that AI can already do', 74, 396);
 
-  // bottom row: score · receipts · provenance
+  // the annual gut-punch — same math, honest unit (heat: it is data)
+  const annual = workWeeksLine(hoursNum);
+  if (annual) {
+    const agrad = ctx.createLinearGradient(72, 0, 620, 0);
+    agrad.addColorStop(0, '#FF7A1A');
+    agrad.addColorStop(1, '#FF3D5E');
+    ctx.fillStyle = agrad;
+    ctx.font = '500 30px "IBM Plex Mono", monospace';
+    ctx.fillText(annual, 72, 452);
+  }
+
+  // the roast — one receipt speaks (middle-truncated to fit)
+  const roast = roastLine((scan.findings || []).filter(f => {
+    const st = f.automation && f.automation.status;
+    return st !== 'automated' && st !== 'dismissed';
+  }));
+  if (roast) {
+    ctx.fillStyle = '#9C8F80';
+    ctx.font = '400 19px "IBM Plex Mono", monospace';
+    let line = roast;
+    while (ctx.measureText(line).width > W - 144 && line.length > 8) line = line.slice(0, -2);
+    if (line !== roast) line += '…';
+    ctx.fillText(line, 72, 500);
+  }
+
+  // bottom row: score+receipts left · install command right
   const receipts = Math.min((scan.findings || []).length, MAX_RECEIPTS);
   ctx.fillStyle = '#EDE6DC';
   ctx.font = '500 24px "IBM Plex Mono", monospace';
-  const scoreStr = 'LEVERAGE ' + ((scan.score && scan.score.value) != null ? scan.score.value : '—') + '/100';
-  ctx.fillText(scoreStr, 72, 546);
+  const scoreStr = 'LEVERAGE ' + (score != null ? score : '—') + '/100';
+  ctx.fillText(scoreStr, 72, 556);
   const scoreW = ctx.measureText(scoreStr).width;
   ctx.fillStyle = '#9C8F80';
-  ctx.fillText(receipts + ' receipt' + (receipts === 1 ? '' : 's'), 72 + scoreW + 44, 546);
+  ctx.fillText(receipts + ' receipt' + (receipts === 1 ? '' : 's'), 72 + scoreW + 40, 556);
   ctx.textAlign = 'right';
-  ctx.font = '400 17px "IBM Plex Mono", monospace';
-  ctx.fillText('read locally — nothing left the machine', W - 72, 546);
+  ctx.fillStyle = '#EDE6DC';
+  ctx.fillText('npx latent-scan', W - 72, 556);
   ctx.textAlign = 'left';
+
+  // provenance — the trust line
+  ctx.fillStyle = '#9C8F80';
+  ctx.font = '400 15px "IBM Plex Mono", monospace';
+  ctx.fillText('read locally — nothing left the machine', 72, 584);
 }
 
 /* ---------- small components ---------- */
@@ -758,6 +871,7 @@ function TopStats({ value, hours }) {
       <span className={'topbar-stat stat-pulse' + (pulse ? ' on' : '')}>
         LEVERAGE {value != null ? <TweenNumber value={value} decimals={0} /> : '—'}
         <span className="dim">/100</span>
+        {tierOf(value) ? <span className="tier"> · {tierOf(value)}</span> : null}
       </span>
       <span className="topbar-stat">
         <span className="heat-text">≈<TweenNumber value={hours} decimals={1} /> h/wk</span>{' '}
@@ -1305,7 +1419,8 @@ function App() {
         } catch (e) { /* network-level failure: no server — try the demo below */ }
       }
       try {
-        const d = await fetchJSON('/demo-scan.json');
+        // no-store: sample data must never go stale across redeploys
+        const d = await fetchJSON('/demo-scan.json', { cache: 'no-store' });
         if (!dead && d.ok && d.body && Array.isArray(d.body.findings)) {
           setDemoMode(true);
           setScan(d.body); seedAutoMap(d.body); setHasLast(true);
@@ -1710,11 +1825,14 @@ function App() {
             <div className="clean-sheet">
               <h2 className="state-title">Clean sheet.</h2>
               <p className="state-body">Rescan when you've shipped more work.</p>
-              <div className="clean-sheet-score">LEVERAGE {score.value != null ? score.value : '—'}/100</div>
+              <div className="clean-sheet-score">LEVERAGE {score.value != null ? score.value : '—'}/100{tierOf(score.value) ? ' · ' + tierOf(score.value) : ''}</div>
               <button className="btn btn-primary" onClick={rescan}>Rescan</button>
             </div>
           ) : (
             <React.Fragment>
+              {roastLine(activeList) ? (
+                <p className="roast">{roastLine(activeList)} <span className="roast-dim">It has receipts.</span></p>
+              ) : null}
               <div className="report-intro">
                 <h2 className="report-title">{activeList.length} receipt{activeList.length === 1 ? '' : 's'}, hottest first</h2>
                 <span className="report-sub">
@@ -1817,13 +1935,14 @@ function App() {
 
 /* ---------- reveal choreography (~4s, click to skip; never mounted under reduced motion) ---------- */
 function Reveal({ scan, onDone }) {
-  const [step, setStep] = useState(0); // 1: stats · 2: number counts · 3: score stamp
+  const [step, setStep] = useState(0); // 1: stats · 2: number counts · 3: annual line · 4: score stamp
   useEffect(() => {
     const timers = [
       setTimeout(() => setStep(1), 120),
       setTimeout(() => setStep(2), 750),
-      setTimeout(() => setStep(3), 2750),
-      setTimeout(onDone, 3900),
+      setTimeout(() => setStep(3), 2650),
+      setTimeout(() => setStep(4), 3250),
+      setTimeout(onDone, 4500),
     ];
     return () => timers.forEach(clearTimeout);
   }, [onDone]);
@@ -1831,6 +1950,8 @@ function Reveal({ scan, onDone }) {
   const stats = scan.stats || {};
   const score = scan.score || {};
   const secs = ((stats.durationMs || 0) / 1000).toFixed(1);
+  const annual = workWeeksLine(score.recoverableHoursPerWeek || 0);
+  const tier = tierOf(score.value);
 
   return (
     <main className="reveal" onClick={onDone}>
@@ -1843,8 +1964,11 @@ function Reveal({ scan, onDone }) {
         </div>
         <div className="big-number-label">estimated hours/week you're doing by hand that AI can already do</div>
       </div>
-      <div className={'rv rv-stamp' + (step >= 3 ? ' on' : '')}>
-        <span className="stamp">LEVERAGE {score.value != null ? score.value : '—'}/100</span>
+      {annual ? (
+        <div className={'rv reveal-annual' + (step >= 3 ? ' on' : '')}>{annual}</div>
+      ) : null}
+      <div className={'rv rv-stamp' + (step >= 4 ? ' on' : '')}>
+        <span className="stamp">LEVERAGE {score.value != null ? score.value : '—'}/100{tier ? ' · ' + tier : ''}</span>
       </div>
       <button className="skip-hint" onClick={onDone}>Click to skip</button>
     </main>

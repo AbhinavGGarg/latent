@@ -61,6 +61,15 @@ over the index. Per-file text reads only for whitelisted exts (.md .txt .csv .js
 11. **shell-rituals** — OPT-IN ONLY (`--shell` / POST `{shellHistory:true}`): ~/.zsh_history + ~/.bash_history,
     last 20k entries; findings show redacted templates only (`git push …(2 args)`) — no paths/flags/values, ever.
     Rituals: consecutive 2–5-command n-grams ≥8× → occ/wk × len × 20s, cap 1.5. Alias: >40-char cmd ≥10× → occ/wk × 15s, cap 0.5.
+12. **node-modules-graveyard** — walker records skipped node_modules dirs; parents whose newest indexed
+    file is 60+ days old (no indexed files = stale) get `du -sk` (first 20, 3s timeout, silent skip).
+    One aggregated finding if stale total ≥ 1 GB. One-shot 20min ÷ 8wk. Cap 0.3. oneShot.
+13. **unpushed-work** — per repo with non-empty `git remote` (cap 30, 3s timeout): commits from
+    `git log --branches --not --remotes` ≥3 → finding, aggregated when ≥2 repos qualify.
+    One-shot 10min per repo ÷ 8wk. Cap 0.2. oneShot.
+14. **fossil-todos** — TODO/FIXME/HACK count in repo source files 200B–200KB (≤400 reads, newest first).
+    ≥10 total → one aggregated finding. Age claims come ONLY from the containing file's mtime (180+ days
+    untouched → the marker is provably at least that old). count × 1min ÷ 8wk. Cap 0.4. oneShot.
 
 Walker rules: default roots `[$HOME/Downloads, $HOME/Desktop, $HOME/Documents]` plus common
 code dirs ($HOME/{Projects,projects,Developer,dev,code,repos,workspace}) — existing only. EXCLUDE dirs: node_modules, .git (contents; still note repo), Library, .cache, .npm,

@@ -8,7 +8,7 @@
  *   const { runScan, DETECTORS, ESTIMATES } = require('./scanner');
  *
  * Walks the given roots once, builds a file index, runs the detectors over it
- * (10 by default; the opt-in shell-history detector runs ONLY when
+ * (13 by default; the opt-in shell-history detector runs ONLY when
  * opts.shellHistory === true / --shell), and emits the scan object defined in
  * SPEC.md. Every fs touch is wrapped; EPERM/EACCES/ENOENT (and anything else)
  * count into stats.skipped, never throw.
@@ -144,6 +144,21 @@ const ESTIMATES = {
     formula: 'occurrences per week x 15 s; cap 0.5 h/wk',
     hours: (m) => m.perWeek * 15 / 3600,
   },
+  'node-modules-graveyard': {
+    capHoursPerWeek: 0.3,
+    formula: 'one-shot 20 min to review and run the reclaim script, amortized over 8 wk; cap 0.3 h/wk',
+    hours: () => (20 / 60) / 8, // the GB number is the headline; the hours stay honest and small
+  },
+  'unpushed-work': {
+    capHoursPerWeek: 0.2,
+    formula: 'one-shot 10 min per repo to push or bundle, amortized over 8 wk; cap 0.2 h/wk',
+    hours: (m) => m.repoCount * (10 / 60) / 8,
+  },
+  'fossil-todos': {
+    capHoursPerWeek: 0.4,
+    formula: 'one-shot 1 min per marker to triage, amortized over 8 wk; cap 0.4 h/wk',
+    hours: (m) => m.count * (1 / 60) / 8,
+  },
 };
 
 function round2(x) { return Math.round(x * 100) / 100; }
@@ -239,6 +254,9 @@ function resolveRoots(requested, home) {
 function walk(roots, stats, emit) {
   const files = [];
   const repos = new Set();
+  // node_modules dirs stay OUT of the index, but each one skipped is recorded
+  // (with its parent project dir) for the node-modules-graveyard detector.
+  const nodeModulesDirs = [];
   const stack = roots.map((r) => ({ dir: r, depth: 0, root: r }));
 
   while (stack.length) {
@@ -259,12 +277,15 @@ function walk(roots, stats, emit) {
     }
 
     for (const ent of entries) {
-      if (files.length >= MAX_FILES) return { files, repos };
+      if (files.length >= MAX_FILES) return { files, repos, nodeModulesDirs };
       const name = ent.name;
       const p = path.join(dir, name);
       if (ent.isSymbolicLink()) continue; // never follow symlinks
       if (ent.isDirectory()) {
-        if (isExcludedDir(name, p)) continue;
+        if (isExcludedDir(name, p)) {
+          if (name === 'node_modules') nodeModulesDirs.push({ path: p, parent: dir });
+          continue;
+        }
         if (depth + 1 <= MAX_DEPTH) stack.push({ dir: p, depth: depth + 1, root });
       } else if (ent.isFile()) {
         let st;
@@ -283,7 +304,7 @@ function walk(roots, stats, emit) {
       // Sockets/FIFOs/unknown dirent types are ignored.
     }
   }
-  return { files, repos };
+  return { files, repos, nodeModulesDirs };
 }
 
 // ---------------------------------------------------------------------------
@@ -352,10 +373,31 @@ function buildContext(files, repos, roots, stats, home) {
     });
   }
 
+  // Generic git call, same contract as gitLog: execFile with a hard 3s
+  // timeout; ANY error (no git binary, not a real repo, timeout kill) counts
+  // into stats.skipped and resolves to null — the caller skips that repo.
+  // Success resolves to the trimmed non-empty stdout lines (possibly []).
+  function gitLines(repoDir, args) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+      try {
+        execFile(
+          'git', args,
+          { cwd: repoDir, timeout: 3000, maxBuffer: 1024 * 1024, windowsHide: true },
+          (err, stdout) => {
+            if (err) { stats.skipped++; return done(null); }
+            done(String(stdout).split('\n').map((s) => s.trim()).filter(Boolean));
+          }
+        );
+      } catch (e) { stats.skipped++; done(null); }
+    });
+  }
+
   return {
     files, byDir, repos: repoList, repoFiles, roots, stats, home,
     claimed: new Set(), // paths already explained by a detector — prevents double-counted hours
-    readText, gitLog,
+    readText, gitLog, gitLines,
   };
 }
 
@@ -1222,6 +1264,228 @@ function detectShellRituals(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Detector 12 — node-modules-graveyard. The walker records every node_modules
+// dir it skips (their contents never enter the index); here, each one whose
+// parent project looks asleep — newest indexed file under the parent older
+// than 60 days, or no indexed files at all — is measured with `du -sk`
+// (first 20 stale dirs only, 3s timeout each, run in parallel, silent skip on
+// error). One aggregated finding when the stale total clears the gate.
+// ---------------------------------------------------------------------------
+
+const GRAVEYARD_STALE_MS = 60 * 24 * 3600 * 1000; // parent untouched for 60+ days
+const GRAVEYARD_MAX_DU = 20;                      // hard cap on du calls per scan
+// Finding gate: 1 GB (in KB) of stale node_modules total, by default.
+// LATENT_GRAVEYARD_MIN_KB is TEST-ONLY — it lets a fixture with a few MB of
+// junk exercise the detector end-to-end. Production scans never set it.
+const GRAVEYARD_MIN_KB_DEFAULT = 1024 * 1024;
+
+function graveyardMinKb() {
+  const v = Number(process.env.LATENT_GRAVEYARD_MIN_KB);
+  return Number.isFinite(v) && v > 0 ? v : GRAVEYARD_MIN_KB_DEFAULT;
+}
+
+// du -sk via execFile: resolves to a KB count, or null on ANY error (no du,
+// timeout kill, permission failure) — counted into stats.skipped, never thrown.
+function duKb(dirPath, stats) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    try {
+      execFile(
+        'du', ['-sk', dirPath],
+        { timeout: 3000, maxBuffer: 1024 * 1024, windowsHide: true },
+        (err, stdout) => {
+          if (err) { stats.skipped++; return done(null); }
+          const kb = parseInt(String(stdout), 10);
+          if (!Number.isFinite(kb)) { stats.skipped++; return done(null); }
+          done(kb);
+        }
+      );
+    } catch (e) { stats.skipped++; done(null); }
+  });
+}
+
+async function detectNodeModulesGraveyard(ctx) {
+  const list = ctx.nodeModulesDirs || [];
+  if (!list.length) return [];
+  const cutoff = Date.now() - GRAVEYARD_STALE_MS;
+
+  // Staleness first, du second. Sizes are unknown until measured, so the du
+  // budget goes to the first GRAVEYARD_MAX_DU stale dirs encountered.
+  const stale = [];
+  for (const nm of list) {
+    if (stale.length >= GRAVEYARD_MAX_DU) break;
+    // Newest indexed file under the parent project decides staleness; the
+    // node_modules contents are never indexed, so they cannot vouch for it.
+    let newest = 0, fresh = false;
+    const prefix = nm.parent + path.sep;
+    for (const f of ctx.files) {
+      if (!f.path.startsWith(prefix)) continue;
+      if (f.mtime >= cutoff) { fresh = true; break; } // one recent file clears the project
+      if (f.mtime > newest) newest = f.mtime;
+    }
+    if (fresh) continue; // a parent with no indexed files (newest 0) counts as stale
+    stale.push({ nm, newest, sizeKb: null });
+  }
+  if (!stale.length) return [];
+
+  // Parallel with per-call 3s timeouts: 20 slow dirs cost one timeout, not 20.
+  await Promise.all(stale.map(async (s) => { s.sizeKb = await duKb(s.nm.path, ctx.stats); }));
+  const measured = stale.filter((s) => Number.isFinite(s.sizeKb) && s.sizeKb > 0);
+  const totalKb = measured.reduce((sum, s) => sum + s.sizeKb, 0);
+  if (!measured.length || totalKb < graveyardMinKb()) return [];
+
+  // Display date: newest indexed file, or the husk project's own dir mtime.
+  for (const s of measured) {
+    if (!s.newest) {
+      try { s.newest = fs.lstatSync(s.nm.parent).mtimeMs; }
+      catch (e) { ctx.stats.skipped++; }
+    }
+  }
+
+  measured.sort((a, b) => b.sizeKb - a.sizeKb);
+  const n = measured.length;
+  const totalGb = totalKb / (1024 * 1024);
+  const est = estimateHours('node-modules-graveyard', {});
+  const evidence = measured.slice(0, 8).map((s) => ({
+    path: s.nm.parent,
+    detail: `${(s.sizeKb / (1024 * 1024)).toFixed(1)} GB` +
+      (s.newest ? `, last touched ${iso(s.newest).slice(0, 10)}` : ', no project files indexed'),
+    mtime: iso(s.newest || Date.now()),
+  }));
+  const summary = (n === 1
+    ? `1 node_modules folder in a project untouched for 60+ days holds ${totalGb.toFixed(1)} GB. `
+    : `${n} node_modules folders in projects untouched for 60+ days hold ${totalGb.toFixed(1)} GB. `) +
+    'The code is asleep; the dependencies never left.';
+  return [makeFinding(
+    'node-modules-graveyard',
+    'Dead projects are hoarding your disk',
+    summary,
+    evidence,
+    { count: n, estMinutesPerInstance: 20, estHoursPerWeek: est, confidence: 0.9, oneShot: true, totalGB: round2(totalGb) }
+  )];
+}
+
+// ---------------------------------------------------------------------------
+// Detector 13 — unpushed-work. Per repo (first 30, same bound as
+// commit-drudgery): only repos with a non-empty `git remote` are judged —
+// no remote means nothing was ever expected to be pushed. Commits on local
+// branches that exist on no remote are counted; 3+ makes a finding.
+// ---------------------------------------------------------------------------
+
+const UNPUSHED_MIN_COMMITS = 3;
+const UNPUSHED_MAX_REPOS = 30;
+
+async function detectUnpushedWork(ctx) {
+  const qual = [];
+  for (const repo of ctx.repos.slice(0, UNPUSHED_MAX_REPOS)) { // bound total git time
+    const remotes = await ctx.gitLines(repo, ['remote']);
+    if (!remotes || !remotes.length) continue; // no remote configured — skip
+    const lines = await ctx.gitLines(repo, ['log', '--branches', '--not', '--remotes', '--oneline', '-n', '50']);
+    if (!lines || lines.length < UNPUSHED_MIN_COMMITS) continue;
+    const files = ctx.repoFiles.get(repo) || [];
+    let newest = 0;
+    for (const f of files) if (f.mtime > newest) newest = f.mtime;
+    qual.push({ repo, n: lines.length, newest: newest || Date.now() });
+  }
+  if (!qual.length) return [];
+
+  // One finding: per-repo when a single repo qualifies, aggregated (like
+  // untested-repos) when two or more do.
+  qual.sort((a, b) => b.n - a.n);
+  const total = qual.reduce((s, q) => s + q.n, 0);
+  const est = estimateHours('unpushed-work', { repoCount: qual.length });
+  const evidence = qual.slice(0, 8).map((q) => ({
+    path: q.repo, detail: `${q.n} unpushed commits`, mtime: iso(q.newest),
+  }));
+  const summary = qual.length === 1
+    ? `${total} commits in ${tilde(qual[0].repo, ctx.home)} are pushed nowhere. One spilled coffee deletes them.`
+    : `${total} commits across ${qual.length} repos are pushed nowhere. One spilled coffee deletes them.`;
+  return [makeFinding(
+    'unpushed-work',
+    'Work exists only on this laptop',
+    summary,
+    evidence,
+    { count: total, estMinutesPerInstance: 10, estHoursPerWeek: est, confidence: 0.9, oneShot: true, repoCount: qual.length }
+  )];
+}
+
+// ---------------------------------------------------------------------------
+// Detector 14 — fossil-todos. TODO/FIXME/HACK markers in repo source files.
+// HONESTY RULE for age: an age is claimed ONLY when the containing file's
+// mtime is 180+ days old — an untouched file's marker is provably at least
+// that old; anything younger gets a bare marker count, no age.
+// ---------------------------------------------------------------------------
+
+const FOSSIL_MARKER_RE = /(TODO|FIXME|HACK)\b/g;
+const FOSSIL_MIN_TOTAL = 10;                    // markers across the scan before it is a finding
+const FOSSIL_MAX_FILES = 400;                   // read cap across the whole scan
+const FOSSIL_MIN_BYTES = 200;
+const FOSSIL_OLD_MS = 180 * 24 * 3600 * 1000;   // age-claim threshold
+const MONTH_MS = 30 * 24 * 3600 * 1000;
+
+function detectFossilTodos(ctx) {
+  // Source files inside repos only, 200 B – 200 KB. Newest first, so the
+  // read budget lands on the projects still being worked on.
+  const candidates = [];
+  for (const [repo, files] of ctx.repoFiles) {
+    for (const f of files) {
+      if (!SOURCE_EXTS.has(f.ext)) continue;
+      if (f.size < FOSSIL_MIN_BYTES || f.size > TEXT_READ_MAX) continue;
+      candidates.push({ f, repo });
+    }
+  }
+  if (!candidates.length) return [];
+  candidates.sort((a, b) => b.f.mtime - a.f.mtime);
+
+  const now = Date.now();
+  const hits = [];
+  const repoSet = new Set();
+  let total = 0;
+  for (const c of candidates.slice(0, FOSSIL_MAX_FILES)) {
+    let text;
+    try {
+      text = fs.readFileSync(c.f.path, 'utf8');
+      ctx.stats.textFilesSampled++;
+    } catch (e) { ctx.stats.skipped++; continue; }
+    const m = text.match(FOSSIL_MARKER_RE);
+    if (!m) continue;
+    const age = now - c.f.mtime;
+    hits.push({
+      f: c.f, repo: c.repo, markers: m.length,
+      old: age > FOSSIL_OLD_MS,
+      months: Math.floor(age / MONTH_MS),
+    });
+    total += m.length;
+    repoSet.add(c.repo);
+  }
+  if (total < FOSSIL_MIN_TOTAL) return [];
+
+  // Provably-old files first, then by marker count.
+  hits.sort((a, b) => (b.old ? 1 : 0) - (a.old ? 1 : 0) || b.markers - a.markers);
+  const oldHits = hits.filter((h) => h.old);
+  const oldestMonths = oldHits.length ? Math.max(...oldHits.map((h) => h.months)) : 0;
+  const repoCount = repoSet.size;
+  const est = estimateHours('fossil-todos', { count: total });
+  const evidence = hits.slice(0, 8).map((h) => ({
+    path: h.f.path,
+    detail: `${h.markers} marker${h.markers === 1 ? '' : 's'}` +
+      (h.old ? `, file untouched ${h.months} months` : ''),
+    mtime: iso(h.f.mtime),
+  }));
+  const summary =
+    `${total} TODO/FIXME markers across ${repoCount} repo${repoCount === 1 ? '' : 's'}` +
+    (oldHits.length ? `; the oldest sits in a file untouched for ${oldestMonths} months.` : '.');
+  return [makeFinding(
+    'fossil-todos',
+    'Your code is full of fossils',
+    summary,
+    evidence,
+    { count: total, estMinutesPerInstance: 1, estHoursPerWeek: est, confidence: 0.85, oneShot: true, fileCount: hits.length, repoCount }
+  )];
+}
+
+// ---------------------------------------------------------------------------
 // DETECTORS — spec order. Execution order differs slightly (see EXEC_ORDER):
 // series detectors run first and "claim" their files so the same manual work
 // is never billed twice across detectors.
@@ -1239,6 +1503,9 @@ const DETECTOR_META = {
   'csv-report-assembly': { kind: 'report-assembler',   title: 'Report assembler agent' },
   'scaffold-repetition': { kind: 'scaffold-skill',     title: 'Scaffold skill' },
   'shell-rituals':       { kind: 'shell-ritual',       title: 'Shell script agent' },
+  'node-modules-graveyard': { kind: 'disk-reclaimer',  title: 'Disk reclaimer agent' },
+  'unpushed-work':       { kind: 'repo-hygiene',       title: 'Repo hygiene agent' },
+  'fossil-todos':        { kind: 'todo-triage',        title: 'TODO triage agent' },
 };
 
 const DETECTORS = [
@@ -1253,6 +1520,9 @@ const DETECTORS = [
   { name: 'csv-report-assembly', automation: DETECTOR_META['csv-report-assembly'], run: detectCsvReportAssembly },
   { name: 'scaffold-repetition', automation: DETECTOR_META['scaffold-repetition'], run: detectScaffoldRepetition },
   { name: 'shell-rituals',       automation: DETECTOR_META['shell-rituals'],       run: detectShellRituals }, // opt-in
+  { name: 'node-modules-graveyard', automation: DETECTOR_META['node-modules-graveyard'], run: detectNodeModulesGraveyard },
+  { name: 'unpushed-work',       automation: DETECTOR_META['unpushed-work'],       run: detectUnpushedWork },
+  { name: 'fossil-todos',        automation: DETECTOR_META['fossil-todos'],        run: detectFossilTodos },
 ];
 
 // Claim-producing detectors first so hours are never double-counted.
@@ -1260,6 +1530,7 @@ const EXEC_ORDER = [
   'dated-recurrence', 'csv-report-assembly', 'version-chains', 'near-duplicate-text',
   'untested-repos', 'undocumented-repos', 'screenshot-pileup', 'downloads-entropy',
   'commit-drudgery', 'scaffold-repetition', 'shell-rituals',
+  'node-modules-graveyard', 'unpushed-work', 'fossil-todos',
 ];
 
 // ---------------------------------------------------------------------------
@@ -1290,11 +1561,12 @@ async function runScan(opts = {}, onProgress) {
   };
 
   emit('walking', roots[0] || '', true);
-  const { files, repos } = walk(roots, stats, emit);
+  const { files, repos, nodeModulesDirs } = walk(roots, stats, emit);
 
   emit('analyzing', '', true);
   const ctx = buildContext(files, repos, roots, stats, home);
   ctx.shellHistory = opts.shellHistory === true; // opt-in only — anything else never reads history
+  ctx.nodeModulesDirs = nodeModulesDirs; // recorded by the walker for node-modules-graveyard
   const byName = new Map(DETECTORS.map((d) => [d.name, d]));
   const findings = [];
   for (const name of EXEC_ORDER) {

@@ -1,20 +1,20 @@
 {
-  "generatedAt": "2026-07-03T21:40:19.787Z",
+  "generatedAt": "2026-07-07T04:12:33.332Z",
   "roots": [
     "/Users/sam/Documents",
     "/Users/sam/Downloads"
   ],
   "stats": {
-    "files": 110,
-    "dirs": 12,
-    "repos": 1,
-    "textFilesSampled": 8,
-    "durationMs": 36,
-    "skipped": 0
+    "files": 132,
+    "dirs": 24,
+    "repos": 2,
+    "textFilesSampled": 20,
+    "durationMs": 98,
+    "skipped": 1
   },
   "score": {
-    "value": 74,
-    "recoverableHoursPerWeek": 2.9,
+    "value": 72,
+    "recoverableHoursPerWeek": 3.1,
     "methodology": "score = clamp(round(100 - 9*hours), 4, 96); hours = sum of per-finding estimates, each capped; formulas in ESTIMATES table"
   },
   "findings": [
@@ -27,32 +27,32 @@
         {
           "path": "/Users/sam/Documents/reports/weekly-status-2026-06-22.md",
           "detail": "6 dated files, one every ~7 days",
-          "mtime": "2026-06-28T21:40:19.615Z"
+          "mtime": "2026-07-02T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/reports/weekly-status-2026-06-15.md",
           "detail": "earlier instance",
-          "mtime": "2026-06-21T21:40:19.615Z"
+          "mtime": "2026-06-25T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/reports/weekly-status-2026-06-08.md",
           "detail": "earlier instance",
-          "mtime": "2026-06-14T21:40:19.615Z"
+          "mtime": "2026-06-18T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/reports/weekly-status-2026-06-01.md",
           "detail": "earlier instance",
-          "mtime": "2026-06-07T21:40:19.615Z"
+          "mtime": "2026-06-11T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/reports/weekly-status-2026-05-25.md",
           "detail": "earlier instance",
-          "mtime": "2026-05-31T21:40:19.615Z"
+          "mtime": "2026-06-04T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/reports/weekly-status-2026-05-18.md",
           "detail": "earlier instance",
-          "mtime": "2026-05-24T21:40:19.615Z"
+          "mtime": "2026-05-28T04:12:13.545Z"
         }
       ],
       "metrics": {
@@ -78,32 +78,32 @@
         {
           "path": "/Users/sam/Documents/side-project/src/module9.js",
           "detail": "10 versions, module0.js \u2192 module9.js",
-          "mtime": "2026-06-24T21:40:19.615Z"
+          "mtime": "2026-06-28T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/side-project/src/module0.js",
           "detail": "version 1 of 10",
-          "mtime": "2026-06-24T21:40:19.615Z"
+          "mtime": "2026-06-28T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/side-project/src/module1.js",
           "detail": "version 2 of 10",
-          "mtime": "2026-06-24T21:40:19.615Z"
+          "mtime": "2026-06-28T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/side-project/src/module2.js",
           "detail": "version 3 of 10",
-          "mtime": "2026-06-24T21:40:19.615Z"
+          "mtime": "2026-06-28T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/side-project/src/module3.js",
           "detail": "version 4 of 10",
-          "mtime": "2026-06-24T21:40:19.615Z"
+          "mtime": "2026-06-28T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/side-project/src/module4.js",
           "detail": "version 5 of 10",
-          "mtime": "2026-06-24T21:40:19.615Z"
+          "mtime": "2026-06-28T04:12:13.545Z"
         }
       ],
       "metrics": {
@@ -129,17 +129,17 @@
         {
           "path": "/Users/sam/Documents/outreach/intro-alex.md",
           "detail": "3 files share \u226570% of their text",
-          "mtime": "2026-06-21T21:40:19.615Z"
+          "mtime": "2026-06-25T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/outreach/intro-casey.md",
           "detail": "0.7 KB near-duplicate",
-          "mtime": "2026-06-21T21:40:19.615Z"
+          "mtime": "2026-06-25T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/outreach/intro-jordan.md",
           "detail": "0.7 KB near-duplicate",
-          "mtime": "2026-06-21T21:40:19.615Z"
+          "mtime": "2026-06-25T04:12:13.545Z"
         }
       ],
       "metrics": {
@@ -160,12 +160,12 @@
       "id": "untested-repos:b06bf6b0",
       "detector": "untested-repos",
       "title": "Your repos have no tests",
-      "summary": "1 repo with 10 source files contain zero test files. Every change is verified by hand, or not at all.",
+      "summary": "1 repo with 12 source files contain zero test files. Every change is verified by hand, or not at all.",
       "evidence": [
         {
           "path": "/Users/sam/Documents/side-project",
-          "detail": "10 source files, 0 tests",
-          "mtime": "2026-06-24T21:40:19.615Z"
+          "detail": "12 source files, 0 tests",
+          "mtime": "2026-06-28T04:12:13.545Z"
         }
       ],
       "metrics": {
@@ -191,27 +191,27 @@
         {
           "path": "/Users/sam/Downloads",
           "detail": "74 loose files at the top level",
-          "mtime": "2026-07-03T21:40:19.615Z"
+          "mtime": "2026-07-07T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Downloads/asset-pack-000.tmp",
           "detail": "0 KB",
-          "mtime": "2026-07-03T21:40:19.615Z"
+          "mtime": "2026-07-07T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Downloads/asset-pack-050.tmp",
           "detail": "0 KB",
-          "mtime": "2026-07-03T21:40:19.615Z"
+          "mtime": "2026-07-07T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Downloads/asset-pack-001.tmp",
           "detail": "0 KB",
-          "mtime": "2026-07-02T21:40:19.615Z"
+          "mtime": "2026-07-06T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Downloads/asset-pack-051.tmp",
           "detail": "0 KB",
-          "mtime": "2026-07-02T21:40:19.615Z"
+          "mtime": "2026-07-06T04:12:13.545Z"
         }
       ],
       "metrics": {
@@ -237,17 +237,17 @@
         {
           "path": "/Users/sam/Documents/gym-site",
           "detail": "starter fileset: index.html + package.json",
-          "mtime": "2026-06-13T21:40:19.615Z"
+          "mtime": "2026-06-17T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/florist-site",
           "detail": "starter fileset: index.html + package.json",
-          "mtime": "2026-06-13T21:40:19.615Z"
+          "mtime": "2026-06-17T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/bakery-site",
           "detail": "starter fileset: index.html + package.json",
-          "mtime": "2026-06-13T21:40:19.615Z"
+          "mtime": "2026-06-17T04:12:13.545Z"
         }
       ],
       "metrics": {
@@ -265,6 +265,37 @@
       }
     },
     {
+      "id": "undocumented-repos:cac421ba",
+      "detector": "undocumented-repos",
+      "title": "Your repos ship without a README",
+      "summary": "2 repos with code have no usable README. Anyone opening them starts from zero, including you in six months.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/side-project",
+          "detail": "12 source files, no README",
+          "mtime": "2026-06-28T04:12:13.545Z"
+        },
+        {
+          "path": "/Users/sam/Documents/client-widget",
+          "detail": "1 source files, no README",
+          "mtime": "2026-07-07T04:12:13.760Z"
+        }
+      ],
+      "metrics": {
+        "count": 2,
+        "estMinutesPerInstance": 40,
+        "estHoursPerWeek": 0.17,
+        "confidence": 0.7,
+        "oneShot": true
+      },
+      "automation": {
+        "kind": "doc-writer",
+        "title": "README writer agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
       "id": "version-chains:61900624",
       "detector": "version-chains",
       "title": "You version files by hand",
@@ -273,32 +304,32 @@
         {
           "path": "/Users/sam/Documents/clients/acme/proposal_v6.md",
           "detail": "6 versions, proposal_v1.md \u2192 proposal_v6.md",
-          "mtime": "2026-06-27T21:40:19.615Z"
+          "mtime": "2026-07-01T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/clients/acme/proposal_v1.md",
           "detail": "version 1 of 6",
-          "mtime": "2026-06-07T21:40:19.615Z"
+          "mtime": "2026-06-11T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/clients/acme/proposal_v2.md",
           "detail": "version 2 of 6",
-          "mtime": "2026-06-11T21:40:19.615Z"
+          "mtime": "2026-06-15T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/clients/acme/proposal_v3.md",
           "detail": "version 3 of 6",
-          "mtime": "2026-06-15T21:40:19.615Z"
+          "mtime": "2026-06-19T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/clients/acme/proposal_v4.md",
           "detail": "version 4 of 6",
-          "mtime": "2026-06-19T21:40:19.615Z"
+          "mtime": "2026-06-23T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/clients/acme/proposal_v5.md",
           "detail": "version 5 of 6",
-          "mtime": "2026-06-23T21:40:19.615Z"
+          "mtime": "2026-06-27T04:12:13.545Z"
         }
       ],
       "metrics": {
@@ -324,27 +355,27 @@
         {
           "path": "/Users/sam/Documents/invoices/invoice-2026-06.csv",
           "detail": "5 CSVs share the header \"invoice_id,client,description,hours,rate,amount,date\"",
-          "mtime": "2026-06-13T21:40:19.615Z"
+          "mtime": "2026-06-17T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/invoices/invoice-2026-05.csv",
           "detail": "same header row",
-          "mtime": "2026-05-14T21:40:19.615Z"
+          "mtime": "2026-05-18T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/invoices/invoice-2026-04.csv",
           "detail": "same header row",
-          "mtime": "2026-04-14T21:40:19.615Z"
+          "mtime": "2026-04-18T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/invoices/invoice-2026-03.csv",
           "detail": "same header row",
-          "mtime": "2026-03-15T21:40:19.615Z"
+          "mtime": "2026-03-19T04:12:13.545Z"
         },
         {
           "path": "/Users/sam/Documents/invoices/invoice-2026-02.csv",
           "detail": "same header row",
-          "mtime": "2026-02-13T21:40:19.615Z"
+          "mtime": "2026-02-17T04:12:13.545Z"
         }
       ],
       "metrics": {
@@ -362,27 +393,88 @@
       }
     },
     {
-      "id": "undocumented-repos:b06bf6b0",
-      "detector": "undocumented-repos",
-      "title": "Your repos ship without a README",
-      "summary": "1 repo with code have no usable README. Anyone opening them starts from zero, including you in six months.",
+      "id": "node-modules-graveyard:0b224938",
+      "detector": "node-modules-graveyard",
+      "title": "Dead projects are hoarding your disk",
+      "summary": "1 node_modules folder in a project untouched for 120+ days holds 2.9 GB. The code is asleep; the dependencies never left.",
       "evidence": [
         {
-          "path": "/Users/sam/Documents/side-project",
-          "detail": "10 source files, no README",
-          "mtime": "2026-06-24T21:40:19.615Z"
+          "path": "/Users/sam/Documents/old-hackathon",
+          "detail": "2.9 GB, last touched 2026-03-09",
+          "mtime": "2026-03-09T04:12:13.545Z"
         }
       ],
       "metrics": {
         "count": 1,
-        "estMinutesPerInstance": 40,
-        "estHoursPerWeek": 0.08,
-        "confidence": 0.7,
-        "oneShot": true
+        "estMinutesPerInstance": 20,
+        "estHoursPerWeek": 0.04,
+        "confidence": 0.9,
+        "oneShot": true,
+        "totalGB": 2.9
       },
       "automation": {
-        "kind": "doc-writer",
-        "title": "README writer agent",
+        "kind": "disk-reclaimer",
+        "title": "Disk reclaimer agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "fossil-todos:b8babb9d",
+      "detector": "fossil-todos",
+      "title": "Your code is full of fossils",
+      "summary": "20 TODO/FIXME markers across 1 repo; the oldest sits in a file untouched for 7 months.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/side-project/src/old-utils.js",
+          "detail": "10 markers, file untouched 6 months",
+          "mtime": "2025-12-19T04:12:13.545Z"
+        },
+        {
+          "path": "/Users/sam/Documents/side-project/src/legacy.js",
+          "detail": "10 markers, file untouched 7 months",
+          "mtime": "2025-11-29T04:12:13.545Z"
+        }
+      ],
+      "metrics": {
+        "count": 20,
+        "estMinutesPerInstance": 1,
+        "estHoursPerWeek": 0.04,
+        "confidence": 0.85,
+        "oneShot": true,
+        "fileCount": 2,
+        "repoCount": 1
+      },
+      "automation": {
+        "kind": "todo-triage",
+        "title": "TODO triage agent",
+        "status": "idle",
+        "briefPath": null
+      }
+    },
+    {
+      "id": "unpushed-work:f13174c7",
+      "detector": "unpushed-work",
+      "title": "Work exists only on this laptop",
+      "summary": "4 commits in /Users/sam/Documents/client-widget are pushed nowhere. One spilled coffee deletes them.",
+      "evidence": [
+        {
+          "path": "/Users/sam/Documents/client-widget",
+          "detail": "4 unpushed commits",
+          "mtime": "2026-07-07T04:12:13.760Z"
+        }
+      ],
+      "metrics": {
+        "count": 4,
+        "estMinutesPerInstance": 10,
+        "estHoursPerWeek": 0.02,
+        "confidence": 0.9,
+        "oneShot": true,
+        "repoCount": 1
+      },
+      "automation": {
+        "kind": "repo-hygiene",
+        "title": "Repo hygiene agent",
         "status": "idle",
         "briefPath": null
       }
