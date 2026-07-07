@@ -21,6 +21,7 @@
   const PUBLIC_DIR = path.join(BASE, 'public');
   const SCAN_PATH = path.join(BASE, 'scan.json');
   const PLAYBOOKS_DIR = path.join(BASE, 'playbooks');
+  const CONFIG_PATH = path.join(BASE, 'config.json'); // { preferredRunner }
   const PORT = Number(process.env.PORT) || 8820;
   const WATCH = process.env.LATENT_WATCH === '1'; // overnight scheduler on/off
   const BODY_CAP = 100 * 1024; // SPEC: request body cap 100KB
@@ -325,14 +326,41 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
       }
       if (bin) detected.push({ id: r.id, bin });
     }
-    runnersCache = { detected, preferred: detected[0] ? detected[0].id : null, path: PATH };
+    // A stored preference wins — but only if that agent is still installed.
+    let preferred = detected[0] ? detected[0].id : null;
+    try {
+      const cfg = JSON.parse(await fsp.readFile(CONFIG_PATH, 'utf8'));
+      if (cfg && cfg.preferredRunner && detected.some((d) => d.id === cfg.preferredRunner)) {
+        preferred = cfg.preferredRunner;
+      }
+    } catch (e) { /* no config yet — detection order decides */ }
+    runnersCache = { detected, preferred, path: PATH };
     return runnersCache;
   }
   function runnerById(id) { return RUNNERS.find((r) => r.id === id) || null; }
 
   async function apiGetEnv(req, res) {
-    const r = await detectRunners(false);
+    const r = await detectRunners(true); // always fresh: a user may have just installed one
     sendJSON(res, 200, { runners: r.detected.map((x) => x.id), preferred: r.preferred, platform: process.platform });
+  }
+
+  async function apiPostEnv(req, res) {
+    const raw = await readBody(req);
+    let body;
+    try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'invalid JSON body' }); }
+    const runner = body && body.preferred;
+    if (!RUNNERS.some((r) => r.id === runner)) return sendJSON(res, 400, { error: 'unknown runner' });
+    const r = await detectRunners(true);
+    if (!r.detected.some((d) => d.id === runner)) return sendJSON(res, 409, { error: 'that agent is not installed' });
+    await withFileLock(CONFIG_PATH, async () => {
+      let cfg = {};
+      try { cfg = JSON.parse(await fsp.readFile(CONFIG_PATH, 'utf8')); } catch (e) {}
+      cfg.preferredRunner = runner;
+      await writeFileAtomic(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    });
+    runnersCache = null; // force re-read with the new preference
+    const fresh = await detectRunners(true);
+    sendJSON(res, 200, { runners: fresh.detected.map((x) => x.id), preferred: fresh.preferred });
   }
 
   // ==========================================================================
@@ -883,6 +911,7 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     }
     if (p === '/api/env') {
       if (req.method === 'GET') return apiGetEnv(req, res);
+      if (req.method === 'POST') return apiPostEnv(req, res);
       return sendJSON(res, 405, { error: 'method not allowed' });
     }
     if (p === '/api/tasks') {

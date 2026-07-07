@@ -98,6 +98,17 @@ button { font: inherit; color: inherit; }
 .brief-footer { display: flex; flex-direction: column; gap: 12px; width: 100%; }
 .brief-footer-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .brief-footer-alt { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--seam); }
+.agent-tag { font: 500 12px var(--font-mono); color: var(--ash); letter-spacing: .04em; }
+.agent-none { color: var(--ember); }
+.agent-pick { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-tag-label { font: 500 12px var(--font-mono); color: var(--ash); }
+.agent-opt {
+  border: 1px solid var(--seam); background: none; cursor: pointer;
+  font: 500 12px var(--font-mono); color: var(--ash);
+  border-radius: 999px; padding: 3px 11px;
+}
+.agent-opt.on { color: var(--glacier); border-color: rgba(126,215,255,.4); }
+.tasks-agent-row { margin-bottom: 16px; }
 
 /* demo marker — quiet, never heat/glacier */
 .chip-demo {
@@ -1474,9 +1485,12 @@ function InboxView({ items, onAct, autoOffer, onAutoDecide, watchOn, tasksCount 
 }
 
 /* Tasks: every standing playbook, inspectable — view, pause, run, delete. */
-function TasksView({ tasks, onAct, watchOn, agentEnv }) {
+function TasksView({ tasks, onAct, watchOn, agentEnv, onChoose }) {
   return (
     <main className="report-main">
+      {tasks.length > 0 ? (
+        <div className="tasks-agent-row"><AgentPicker env={agentEnv} onChoose={onChoose} /></div>
+      ) : null}
       {agentEnv && !agentEnv.preferred && tasks.length > 0 ? (
         <div className="watch-hint">
           No agent CLI found on this machine — runs will fail until one is installed
@@ -1514,6 +1528,45 @@ function TasksView({ tasks, onAct, watchOn, agentEnv }) {
         </div>
       ))}
     </main>
+  );
+}
+
+/* Which agent is this command for? Static label when one is installed, a small
+   switcher when several are, an honest 'none' otherwise. Answers 'how do I know
+   which agent I have' and 'what if I have multiple' in one control. */
+function liveRunLine(briefModal, env) {
+  if (!briefModal || !briefModal.dir) return briefModal ? briefModal.runLine : '';
+  const dir = briefModal.dir;
+  const LINES = {
+    claude: 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
+    codex: 'cd ' + dir + ' && codex exec "$(cat BRIEF.md)"',
+    gemini: 'cd ' + dir + ' && gemini -p "$(cat BRIEF.md)"',
+  };
+  const pref = env && env.preferred;
+  return LINES[pref] || LINES.claude;
+}
+
+function AgentPicker({ env, onChoose }) {
+  const runners = (env && env.runners) || [];
+  const RUNNER_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' };
+  if (!runners.length) {
+    return <span className="agent-tag agent-none">No agent detected</span>;
+  }
+  if (runners.length === 1) {
+    return <span className="agent-tag">Agent: {RUNNER_NAMES[runners[0]] || runners[0]}</span>;
+  }
+  return (
+    <span className="agent-pick">
+      <span className="agent-tag-label">Agent:</span>
+      {runners.map(id => (
+        <button
+          key={id}
+          className={'agent-opt' + (env.preferred === id ? ' on' : '')}
+          aria-pressed={env.preferred === id}
+          onClick={() => onChoose(id)}
+        >{RUNNER_NAMES[id] || id}</button>
+      ))}
+    </span>
   );
 }
 
@@ -1830,6 +1883,18 @@ function App() {
     if (phase === 'report' && !demoMode) loadOvernight();
   }, [phase, view, demoMode, loadOvernight]); // view: entering Inbox/Tasks refetches
 
+  // Switch which agent Latent uses (only offered when more than one is installed).
+  const chooseRunner = useCallback(async (id) => {
+    setAgentEnv(e => (e ? { ...e, preferred: id } : e)); // optimistic
+    try {
+      const r = await fetchJSON('/api/env', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferred: id }),
+      });
+      if (r.ok && r.body) setAgentEnv(prev => ({ ...(prev || {}), runners: r.body.runners, preferred: r.body.preferred }));
+    } catch (e) { loadOvernight(); }
+  }, [loadOvernight]);
+
   // Schedules are inferred from what the finding IS; editable later in Tasks.
   const inferSchedule = f => {
     const k = (f.automation && f.automation.kind) || '';
@@ -1919,6 +1984,7 @@ function App() {
     setBriefModal({
       title: finding.title,
       brief,
+      dir,
       // Detected runner wins; otherwise default to claude so a missed detection
       // never hides a command the user can actually run.
       runLine: demoMode ? INSTALL_CMD : (RUN_LINES[preferred] || RUN_LINES.claude),
@@ -2094,7 +2160,7 @@ function App() {
       {view === 'inbox' && !demoMode ? (
         <InboxView items={inbox} onAct={inboxAct} autoOffer={autoOffer} onAutoDecide={autoDecide} watchOn={watchOn} tasksCount={tasks.length} />
       ) : view === 'tasks' && !demoMode ? (
-        <TasksView tasks={tasks} onAct={taskAct} watchOn={watchOn} agentEnv={agentEnv} />
+        <TasksView tasks={tasks} onAct={taskAct} watchOn={watchOn} agentEnv={agentEnv} onChoose={chooseRunner} />
       ) : empty ? (
         <main className="state-card">
           <h1 className="state-title">Clean read.</h1>
@@ -2178,16 +2244,22 @@ function App() {
           onClose={() => setBriefModal(null)}
           footer={
             <div className="brief-footer">
+              {!briefModal.demo ? (
+                <div className="brief-footer-row">
+                  <AgentPicker env={agentEnv} onChoose={chooseRunner} />
+                </div>
+              ) : null}
               <div className="brief-footer-row">
                 {briefModal.demo ? <span className="report-sub">Get your own briefs:</span> : null}
-                <code className="run-line">{briefModal.runLine}</code>
-                <CopyButton text={briefModal.runLine} label={briefModal.demo ? 'Copy install command' : 'Copy run command'} />
+                <code className="run-line">{briefModal.demo ? briefModal.runLine : liveRunLine(briefModal, agentEnv)}</code>
+                <CopyButton text={briefModal.demo ? briefModal.runLine : liveRunLine(briefModal, agentEnv)}
+                            label={briefModal.demo ? 'Copy install command' : 'Copy run command'} />
               </div>
-              {!briefModal.demo && !briefModal.detected ? (
+              {!briefModal.demo && (!agentEnv || !agentEnv.preferred) ? (
                 <div className="brief-footer-alt">
                   <span className="report-sub">
-                    Have Claude Code? Paste the command above in your terminal. On a different agent
-                    (Codex, Gemini) or none, copy the brief into any AI assistant instead:
+                    No agent CLI detected on this machine. The command above assumes Claude Code — if you
+                    have it, paste it in your terminal. Otherwise copy the brief into any AI assistant:
                   </span>
                   <CopyButton text={briefModal.brief} label="Copy the brief" />
                 </div>
