@@ -24,11 +24,20 @@ const SERVER = path.join(BASE, 'server.js');
 const PORT = Number(process.env.PORT) || 8820;
 const URL = `http://localhost:${PORT}`;
 
-console.log(`latent v0.1.0 — read your machine, get receipts (${URL})`);
+// `latent watch` = the resident: same server plus the overnight scheduler.
+// It runs from YOUR terminal on purpose — standing tasks execute the agent
+// under your own login, on your machine, nowhere else.
+const WATCH = process.argv.includes('watch') || process.argv.includes('--watch');
+
+console.log(
+  WATCH
+    ? `latent v0.1.0 — watch mode: standing tasks will run on schedule (${URL})`
+    : `latent v0.1.0 — read your machine, get receipts (${URL})`
+);
 
 const child = spawn(process.execPath, [SERVER], {
   stdio: 'inherit',
-  env: process.env,
+  env: WATCH ? Object.assign({}, process.env, { LATENT_WATCH: '1' }) : process.env,
 });
 
 child.on('error', (err) => {

@@ -22,6 +22,7 @@
   const SCAN_PATH = path.join(BASE, 'scan.json');
   const PLAYBOOKS_DIR = path.join(BASE, 'playbooks');
   const PORT = Number(process.env.PORT) || 8820;
+  const WATCH = process.env.LATENT_WATCH === '1'; // overnight scheduler on/off
   const BODY_CAP = 100 * 1024; // SPEC: request body cap 100KB
 
   // Finding ids are "<detector>:<8-char fnv1a hex>" and get used as a path
@@ -249,6 +250,312 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     await fsp.writeFile(path.join(dir, 'settings.json'), JSON.stringify(settings, null, 2));
   }
 
+  // ==========================================================================
+  // OVERNIGHT — standing tasks, inbox, ledger (docs/OVERNIGHT.md is the contract)
+  // ==========================================================================
+  const TASKS_PATH = path.join(BASE, 'tasks.json');
+  const INBOX_PATH = path.join(BASE, 'inbox.json');
+  const LEDGER_PATH = path.join(BASE, 'ledger.json');
+  const TASK_RUNS_DIR = path.join(PLAYBOOKS_DIR, 'tasks');
+
+  // Per-file promise-chain locks (same discipline as scan.json's lock).
+  const fileLocks = new Map();
+  function withFileLock(file, fn) {
+    const prev = fileLocks.get(file) || Promise.resolve();
+    const run = prev.then(fn, fn);
+    fileLocks.set(file, run.then(() => undefined, () => undefined));
+    return run;
+  }
+
+  async function readJson(file, fallback) {
+    try { return JSON.parse(await fsp.readFile(file, 'utf8')); }
+    catch (e) { return fallback; }
+  }
+
+  function newId(prefix) {
+    return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  // Next run time for a schedule, from `from` (ms). Local time on purpose —
+  // "Monday 7am" means the user's Monday, not UTC's.
+  function computeNextRun(schedule, from) {
+    if (!schedule || schedule.type === 'manual') return null;
+    const d = new Date(from);
+    if (schedule.type === 'interval') {
+      const days = Math.max(1, Number(schedule.days) || 7);
+      return from + days * 86400000;
+    }
+    if (schedule.type === 'weekly') {
+      const dow = Number.isInteger(schedule.dow) ? schedule.dow : 1; // Monday default
+      const hour = Number.isInteger(schedule.hour) ? schedule.hour : 7;
+      const next = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, 0, 0, 0);
+      while (next.getDay() !== dow || next.getTime() <= from) next.setDate(next.getDate() + 1);
+      return next.getTime();
+    }
+    return null;
+  }
+
+  // Credit per approved run: the instance estimate, bounded to stay honest.
+  function creditFor(task) {
+    const m = task.metrics || {};
+    const perInstance = (m.estMinutesPerInstance ? m.estMinutesPerInstance / 60 : null);
+    const h = perInstance != null ? perInstance : (m.estHoursPerWeek || 0.1);
+    return Math.min(Math.max(Math.round(h * 100) / 100, 0.05), 3);
+  }
+
+  // ---- runner: one task -> one run dir -> one inbox item ----
+  const runningTasks = new Set();
+  async function runTask(task) {
+    if (runningTasks.has(task.id)) return;
+    runningTasks.add(task.id);
+    const startedAt = Date.now();
+    const runDir = path.join(TASK_RUNS_DIR, task.id, 'run-' + startedAt);
+    const outDir = path.join(runDir, 'out');
+    let item = {
+      id: newId('item'), taskId: task.id, title: task.title,
+      producedAt: new Date(startedAt).toISOString(),
+      status: 'awaiting', outDir, files: [], receipt: '', reason: null,
+      hoursCredit: creditFor(task),
+    };
+    try {
+      await fsp.mkdir(outDir, { recursive: true });
+      const brief = renderBrief(
+        { id: task.findingId, title: task.title, summary: task.summary, evidence: task.evidence, automation: { kind: task.kind } },
+        { generatedAt: new Date(startedAt).toISOString() },
+        runDir
+      );
+      await fsp.writeFile(path.join(runDir, 'BRIEF.md'), brief);
+      await writePlaybookSettings(runDir);
+
+      const cp = await import('node:child_process');
+      await new Promise((resolve) => {
+        let settled = false;
+        const done = () => { if (!settled) { settled = true; resolve(); } };
+        let child;
+        try {
+          child = cp.spawn('claude', ['-p', brief, '--permission-mode', 'acceptEdits'], {
+            cwd: runDir, stdio: ['ignore', 'pipe', 'pipe'], env: process.env,
+          });
+        } catch (e) {
+          item.status = 'failed';
+          item.reason = 'could not start the agent (' + (e.message || e) + ')';
+          return done();
+        }
+        let errTail = '';
+        child.stderr.on('data', (b) => { errTail = (errTail + b.toString()).slice(-400); });
+        child.stdout.on('data', () => {});
+        const timer = setTimeout(() => {
+          item.status = 'failed';
+          item.reason = 'the run hit the 15-minute cap and was stopped';
+          try { child.kill('SIGKILL'); } catch (e) {}
+          done();
+        }, 15 * 60 * 1000);
+        child.on('error', (e) => {
+          clearTimeout(timer);
+          item.status = 'failed';
+          item.reason = e.code === 'ENOENT'
+            ? 'the claude CLI is not installed or not on PATH for the watcher'
+            : ('agent error: ' + (e.message || e));
+          done();
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          if (item.status === 'awaiting' && code !== 0) {
+            item.status = 'failed';
+            item.reason = 'agent exited ' + code + (errTail ? ' — ' + errTail.trim().slice(-200) : '') +
+              '. Run it yourself: cd ' + runDir + ' && claude -p "$(cat BRIEF.md)"';
+          }
+          done();
+        });
+      });
+
+      // collect artifacts + receipt regardless; a failed run may still leave clues
+      try {
+        const walk = async (dir, base) => {
+          const out = [];
+          for (const ent of await fsp.readdir(dir, { withFileTypes: true })) {
+            const full = path.join(dir, ent.name);
+            const rel = path.join(base, ent.name);
+            if (ent.isDirectory()) out.push(...await walk(full, rel));
+            else out.push(rel);
+          }
+          return out;
+        };
+        item.files = await walk(outDir, '');
+      } catch (e) { /* no out dir — fine */ }
+      try {
+        item.receipt = String(await fsp.readFile(path.join(outDir, 'RECEIPT.md'), 'utf8')).slice(0, 4000);
+      } catch (e) { /* no receipt left */ }
+      if (item.status === 'awaiting' && item.files.length === 0) {
+        item.status = 'failed';
+        item.reason = item.reason || 'the run produced no artifacts';
+      }
+
+      // auto-approved tasks credit the ledger immediately — but stay visible
+      if (item.status === 'awaiting' && task.autonomy === 'auto') {
+        item.status = 'auto';
+        await creditLedger(task.title, item.hoursCredit);
+      }
+    } catch (e) {
+      item.status = 'failed';
+      item.reason = 'runner error: ' + (e.message || e);
+    } finally {
+      runningTasks.delete(task.id);
+    }
+    await withFileLock(INBOX_PATH, async () => {
+      const inbox = await readJson(INBOX_PATH, []);
+      inbox.unshift(item);
+      await writeFileAtomic(INBOX_PATH, JSON.stringify(inbox.slice(0, 200), null, 2));
+    });
+    await withFileLock(TASKS_PATH, async () => {
+      const tasks = await readJson(TASKS_PATH, []);
+      const t = tasks.find((x) => x.id === task.id);
+      if (t) {
+        t.lastRunAt = new Date(startedAt).toISOString();
+        t.nextRunAt = computeNextRun(t.schedule, Date.now());
+      }
+      await writeFileAtomic(TASKS_PATH, JSON.stringify(tasks, null, 2));
+    });
+    console.log('[overnight] ' + task.title + ' -> ' + item.status);
+    return item;
+  }
+
+  async function creditLedger(taskTitle, hours) {
+    await withFileLock(LEDGER_PATH, async () => {
+      const ledger = await readJson(LEDGER_PATH, { totalHours: 0, events: [] });
+      ledger.totalHours = Math.round((ledger.totalHours + hours) * 100) / 100;
+      ledger.events.unshift({ ts: new Date().toISOString(), taskTitle, hours });
+      ledger.events = ledger.events.slice(0, 100);
+      await writeFileAtomic(LEDGER_PATH, JSON.stringify(ledger, null, 2));
+    });
+  }
+
+  // ---- scheduler: only in watch mode; ticks every 60s; loud, never silent ----
+  if (WATCH) {
+    console.log('[overnight] watch mode on — standing tasks will run on schedule');
+    setInterval(async () => {
+      try {
+        const tasks = await readJson(TASKS_PATH, []);
+        const now = Date.now();
+        for (const t of tasks) {
+          if (t.paused || !t.nextRunAt) continue;
+          if (new Date(t.nextRunAt).getTime() <= now && !runningTasks.has(t.id)) {
+            runTask(t); // fire and forget; runTask serializes per task
+          }
+        }
+      } catch (e) { console.error('[overnight] tick failed: ' + (e.message || e)); }
+    }, 60 * 1000);
+  }
+
+  // ---- API handlers ----
+  async function apiGetTasks(req, res) {
+    const tasks = await readJson(TASKS_PATH, []);
+    sendJSON(res, 200, { tasks, watch: WATCH });
+  }
+
+  async function apiPostTasks(req, res) {
+    const raw = await readBody(req);
+    let body;
+    try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'invalid JSON body' }); }
+    const findingId = body && body.findingId;
+    if (typeof findingId !== 'string' || !SAFE_ID.test(findingId)) {
+      return sendJSON(res, 400, { error: 'findingId required' });
+    }
+    let scan;
+    try { scan = JSON.parse(await fsp.readFile(SCAN_PATH, 'utf8')); }
+    catch (e) { return sendJSON(res, 404, { error: 'no scan yet' }); }
+    const finding = (scan.findings || []).find((f) => f.id === findingId);
+    if (!finding) return sendJSON(res, 404, { error: 'unknown finding id' });
+
+    const schedule = body.schedule && ['weekly', 'interval', 'manual'].includes(body.schedule.type)
+      ? body.schedule : { type: 'weekly', dow: 1, hour: 7 };
+    const task = {
+      id: newId('task'),
+      findingId, kind: (finding.automation && finding.automation.kind) || 'recurring-draft',
+      title: finding.title, summary: finding.summary,
+      evidence: finding.evidence, metrics: finding.metrics,
+      schedule, autonomy: 'draft', approvals: 0, paused: false,
+      createdAt: new Date().toISOString(), lastRunAt: null,
+      nextRunAt: computeNextRun(schedule, Date.now()),
+    };
+    await withFileLock(TASKS_PATH, async () => {
+      const tasks = await readJson(TASKS_PATH, []);
+      tasks.push(task);
+      await writeFileAtomic(TASKS_PATH, JSON.stringify(tasks, null, 2));
+    });
+    sendJSON(res, 200, { task, watch: WATCH });
+  }
+
+  async function apiPatchTasks(req, res) {
+    const raw = await readBody(req);
+    let body;
+    try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'invalid JSON body' }); }
+    const { taskId, action } = body || {};
+    const actions = ['pause', 'resume', 'delete', 'run-now', 'autonomy-auto', 'autonomy-draft'];
+    if (typeof taskId !== 'string' || !actions.includes(action)) {
+      return sendJSON(res, 400, { error: 'taskId and a valid action required' });
+    }
+    let found = null;
+    await withFileLock(TASKS_PATH, async () => {
+      let tasks = await readJson(TASKS_PATH, []);
+      const t = tasks.find((x) => x.id === taskId);
+      if (!t) return;
+      found = t;
+      if (action === 'pause') t.paused = true;
+      if (action === 'resume') { t.paused = false; t.nextRunAt = computeNextRun(t.schedule, Date.now()); }
+      if (action === 'delete') tasks = tasks.filter((x) => x.id !== taskId);
+      if (action === 'autonomy-auto') t.autonomy = 'auto';
+      if (action === 'autonomy-draft') t.autonomy = 'draft';
+      await writeFileAtomic(TASKS_PATH, JSON.stringify(tasks, null, 2));
+    });
+    if (!found) return sendJSON(res, 404, { error: 'unknown task id' });
+    if (action === 'run-now') runTask(found); // async; the inbox will receive it
+    sendJSON(res, 200, { ok: true, ran: action === 'run-now' });
+  }
+
+  async function apiGetInbox(req, res) {
+    sendJSON(res, 200, { items: await readJson(INBOX_PATH, []) });
+  }
+
+  async function apiPostInbox(req, res) {
+    const raw = await readBody(req);
+    let body;
+    try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'invalid JSON body' }); }
+    const { itemId, action } = body || {};
+    if (typeof itemId !== 'string' || !['approve', 'reject'].includes(action)) {
+      return sendJSON(res, 400, { error: 'itemId and action approve|reject required' });
+    }
+    let item = null;
+    await withFileLock(INBOX_PATH, async () => {
+      const inbox = await readJson(INBOX_PATH, []);
+      const it = inbox.find((x) => x.id === itemId);
+      if (!it || (it.status !== 'awaiting')) return;
+      it.status = action === 'approve' ? 'approved' : 'rejected';
+      item = it;
+      await writeFileAtomic(INBOX_PATH, JSON.stringify(inbox, null, 2));
+    });
+    if (!item) return sendJSON(res, 404, { error: 'no awaiting item with that id' });
+    let offerAuto = false;
+    if (action === 'approve') {
+      await creditLedger(item.title, item.hoursCredit);
+      await withFileLock(TASKS_PATH, async () => {
+        const tasks = await readJson(TASKS_PATH, []);
+        const t = tasks.find((x) => x.id === item.taskId);
+        if (t) {
+          t.approvals = (t.approvals || 0) + 1;
+          offerAuto = t.approvals >= 3 && t.autonomy === 'draft';
+          await writeFileAtomic(TASKS_PATH, JSON.stringify(tasks, null, 2));
+        }
+      });
+    }
+    const ledger = await readJson(LEDGER_PATH, { totalHours: 0, events: [] });
+    sendJSON(res, 200, { item, offerAuto, totalHours: ledger.totalHours });
+  }
+
+  async function apiGetLedger(req, res) {
+    sendJSON(res, 200, await readJson(LEDGER_PATH, { totalHours: 0, events: [] }));
+  }
+
   // ---- API handlers ----------------------------------------------------------
   async function apiGetScan(req, res) {
     let data;
@@ -474,6 +781,21 @@ Run it: \`cd ${playbookDir} && claude -p --permission-mode acceptEdits "$(cat BR
     }
     if (p === '/api/progress') {
       if (req.method === 'GET') return apiGetProgress(req, res);
+      return sendJSON(res, 405, { error: 'method not allowed' });
+    }
+    if (p === '/api/tasks') {
+      if (req.method === 'GET') return apiGetTasks(req, res);
+      if (req.method === 'POST') return apiPostTasks(req, res);
+      if (req.method === 'PATCH') return apiPatchTasks(req, res);
+      return sendJSON(res, 405, { error: 'method not allowed' });
+    }
+    if (p === '/api/inbox') {
+      if (req.method === 'GET') return apiGetInbox(req, res);
+      if (req.method === 'POST') return apiPostInbox(req, res);
+      return sendJSON(res, 405, { error: 'method not allowed' });
+    }
+    if (p === '/api/ledger') {
+      if (req.method === 'GET') return apiGetLedger(req, res);
       return sendJSON(res, 405, { error: 'method not allowed' });
     }
     if (p === '/api/roots') {

@@ -1,5 +1,8 @@
 # Personal scan output — never commit anyone's machine data
 scan.json
+tasks.json
+inbox.json
+ledger.json
 playbooks/
 run.log
 .DS_Store
