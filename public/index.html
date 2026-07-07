@@ -105,6 +105,42 @@ button { font: inherit; color: inherit; }
 .hero-stats .chip-demo { margin-left: 12px; }
 .demo-install { user-select: all; }
 
+/* overnight: tabs, ratchet, inbox, tasks */
+.tabs { display: inline-flex; gap: 18px; margin-left: 26px; }
+.tab {
+  border: none; background: none; cursor: pointer; padding: 4px 2px;
+  font: 500 12.5px var(--font-mono); letter-spacing: 0.08em; color: var(--ash);
+  text-transform: uppercase; border-bottom: 2px solid transparent;
+}
+.tab.on { color: var(--bone); border-bottom-color: var(--bone); }
+.tab .n { color: var(--glacier); }
+.ratchet { font: 500 12.5px var(--font-mono); color: var(--glacier); white-space: nowrap; }
+.watch-hint {
+  font: 400 12.5px/1.7 var(--font-mono); color: var(--ash);
+  border: 1px solid var(--seam); border-radius: 10px; padding: 12px 16px; margin-bottom: 22px;
+  overflow-wrap: anywhere;
+}
+.watch-hint code { color: var(--bone); }
+.offer-banner {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  border: 1px solid rgba(126,215,255,.35); border-radius: 12px;
+  padding: 14px 18px; margin-bottom: 22px;
+  font: 400 13.5px var(--font-mono); color: var(--bone);
+}
+.inbox-item { background: var(--soot); border: 1px solid var(--seam); border-radius: 14px; padding: 22px 24px; margin-bottom: 16px; }
+.item-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.item-title { font: 700 17px var(--font-display); }
+.item-when { font: 400 12px var(--font-mono); color: var(--ash); }
+.item-files { font: 400 12.5px/1.8 var(--font-mono); color: var(--ash); margin: 8px 0; overflow-wrap: anywhere; }
+.item-receipt { font: 400 12px/1.7 var(--font-mono); color: var(--ash); white-space: pre-wrap; max-height: 130px; overflow: hidden; border-left: 2px solid var(--seam); padding-left: 12px; margin: 10px 0; }
+.chip-await { display: inline-flex; font: 500 11px var(--font-mono); letter-spacing: .06em; color: var(--bone); border: 1px solid var(--ash); border-radius: 999px; padding: 3px 10px; }
+.chip-fail { display: inline-flex; font: 500 11px var(--font-mono); letter-spacing: .06em; color: var(--ember); border: 1px solid rgba(255,122,26,.4); border-radius: 999px; padding: 3px 10px; }
+.chip-ash { display: inline-flex; font: 500 11px var(--font-mono); letter-spacing: .06em; color: var(--ash); border: 1px solid var(--seam); border-radius: 999px; padding: 3px 10px; }
+.task-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; background: var(--soot); border: 1px solid var(--seam); border-radius: 12px; padding: 16px 20px; margin-bottom: 12px; }
+.task-title { font: 500 14.5px var(--font-sans); }
+.task-meta { font: 400 12px var(--font-mono); color: var(--ash); }
+.task-spacer { flex: 1; }
+
 /* cold = handled. The only glacier in the building. */
 .chip-cold {
   display: inline-flex; align-items: center; gap: 8px;
@@ -1252,7 +1288,7 @@ function ConsentModal({ storedRoots, storedShell, onClose, onStart }) {
 }
 
 /* ---------- receipt card ---------- */
-function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, onViewBrief, onSetStatus }) {
+function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, onViewBrief, onSetStatus, onArm, armState }) {
   const m = finding.metrics || {};
   const est = m.estHoursPerWeek || 0;
   const pct = Math.max(4, Math.min(100, (est / (maxEst || 1)) * 100));
@@ -1302,6 +1338,18 @@ function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, o
         ) : (
           <button className="btn btn-ghost" onClick={() => onAutomate(finding)}>Draft the automation</button>
         )}
+        {onArm ? (
+          armState && armState.taskId ? (
+            <span className="chip-cold">Armed</span>
+          ) : armState && armState.pending ? (
+            <button className="btn btn-ghost" disabled>Arming…</button>
+          ) : (
+            <button className="btn btn-ghost" onClick={() => onArm(finding)}>Arm this</button>
+          )
+        ) : null}
+        {armState && armState.error ? (
+          <span className="card-error">Arming failed — {armState.error}.</span>
+        ) : null}
         {status !== 'drafting' ? (
           <React.Fragment>
             <button className="btn-text quiet" disabled={autoState.statusPending}
@@ -1349,6 +1397,113 @@ function ColdRow({ finding, status, pending, error, onUndo }) {
 }
 
 /* ---------- app ---------- */
+const DOW = ['Sundays','Mondays','Tuesdays','Wednesdays','Thursdays','Fridays','Saturdays'];
+function scheduleLabel(sc) {
+  if (!sc || sc.type === 'manual') return 'manual — run it from Tasks';
+  if (sc.type === 'interval') return 'every ' + (sc.days || 7) + ' days';
+  return (DOW[sc.dow != null ? sc.dow : 1] || 'Mondays') + ' ' + String(sc.hour != null ? sc.hour : 7).padStart(2, '0') + ':00';
+}
+function relTime(iso) {
+  if (!iso) return '—';
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return 'due now';
+  const h = Math.round(ms / 3600000);
+  if (h < 1) return 'in ' + Math.max(1, Math.round(ms / 60000)) + ' min';
+  if (h < 48) return 'in ' + h + ' h';
+  return 'in ' + Math.round(h / 24) + ' days';
+}
+
+/* The Inbox: finished work waiting for a decision. The receipt is the notification. */
+function InboxView({ items, onAct, autoOffer, onAutoDecide, watchOn, tasksCount }) {
+  return (
+    <main className="report-main">
+      {!watchOn && tasksCount > 0 ? (
+        <div className="watch-hint">
+          Standing tasks only run while the watcher is on. Start it from your terminal:{' '}
+          <code>latent watch</code> — it runs your tasks under your own agent login, on this machine.
+        </div>
+      ) : null}
+      {autoOffer ? (
+        <div className="offer-banner">
+          <span>You've approved "{autoOffer.title}" {autoOffer.approvals} times. Let this one run itself?</span>
+          <button className="btn btn-primary" onClick={() => onAutoDecide(autoOffer, true)}>Go auto</button>
+          <button className="btn btn-ghost" onClick={() => onAutoDecide(autoOffer, false)}>Keep drafts</button>
+        </div>
+      ) : null}
+      {items.length === 0 ? (
+        <div className="state-card">
+          <h2 className="state-title">Nothing waiting.</h2>
+          <p className="state-body">Armed tasks deposit their drafts here. Arm one from a receipt in the report.</p>
+        </div>
+      ) : items.map(it => (
+        <div className="inbox-item" key={it.id}>
+          <div className="item-head">
+            {it.status === 'awaiting' ? <span className="chip-await">AWAITING YOU</span>
+              : it.status === 'approved' ? <span className="chip-cold">APPROVED</span>
+              : it.status === 'auto' ? <span className="chip-cold">RAN ITSELF</span>
+              : it.status === 'failed' ? <span className="chip-fail">FAILED</span>
+              : <span className="chip-ash">SET ASIDE</span>}
+            <span className="item-title">{it.title}</span>
+            <span className="item-when">{new Date(it.producedAt).toLocaleString()}</span>
+          </div>
+          {it.files && it.files.length ? (
+            <div className="item-files">{it.files.slice(0, 5).map(f => 'out/' + f).join(' · ')}{it.files.length > 5 ? ' · +' + (it.files.length - 5) + ' more' : ''}</div>
+          ) : null}
+          {it.receipt ? <div className="item-receipt">{it.receipt.slice(0, 600)}</div> : null}
+          {it.status === 'failed' && it.reason ? <p className="card-error">{it.reason}</p> : null}
+          <div className="card-actions">
+            {it.status === 'awaiting' ? (
+              <React.Fragment>
+                <button className="btn btn-primary" onClick={() => onAct(it, 'approve')}>Approve · +{it.hoursCredit} h</button>
+                <button className="btn btn-ghost" onClick={() => onAct(it, 'reject')}>Reject</button>
+              </React.Fragment>
+            ) : null}
+            {it.outDir ? <span className="task-meta">{homeToTilde(it.outDir)}</span> : null}
+          </div>
+        </div>
+      ))}
+    </main>
+  );
+}
+
+/* Tasks: every standing playbook, inspectable — view, pause, run, delete. */
+function TasksView({ tasks, onAct, watchOn }) {
+  return (
+    <main className="report-main">
+      {!watchOn && tasks.length > 0 ? (
+        <div className="watch-hint">
+          The watcher is off — schedules are armed but nothing runs until you start it:{' '}
+          <code>latent watch</code>
+        </div>
+      ) : null}
+      {tasks.length === 0 ? (
+        <div className="state-card">
+          <h2 className="state-title">No standing tasks.</h2>
+          <p className="state-body">Arm one from a receipt — Latent will draft it on schedule and wait for your approval.</p>
+        </div>
+      ) : tasks.map(t => (
+        <div className="task-row" key={t.id}>
+          {t.autonomy === 'auto' ? <span className="chip-cold">AUTO</span> : <span className="chip-ash">DRAFTS</span>}
+          <div>
+            <div className="task-title">{t.title}</div>
+            <div className="task-meta">
+              {scheduleLabel(t.schedule)}{t.paused ? ' · paused' : t.nextRunAt ? ' · next ' + relTime(t.nextRunAt) : ''}
+              {t.approvals ? ' · ' + t.approvals + ' approved' : ''}
+            </div>
+          </div>
+          <span className="task-spacer"></span>
+          <button className="btn-text quiet" onClick={() => onAct(t, 'run-now')}>Run now</button>
+          <button className="btn-text quiet" onClick={() => onAct(t, t.paused ? 'resume' : 'pause')}>{t.paused ? 'Resume' : 'Pause'}</button>
+          {t.autonomy === 'auto'
+            ? <button className="btn-text quiet" onClick={() => onAct(t, 'autonomy-draft')}>Back to drafts</button>
+            : null}
+          <button className="btn-text quiet" onClick={() => onAct(t, 'delete')}>Delete</button>
+        </div>
+      ))}
+    </main>
+  );
+}
+
 function App() {
   // state machine: idle → scanning → reveal → report (+ error)
   const [phase, setPhase] = useState('idle');
@@ -1363,6 +1518,14 @@ function App() {
   const [demoMode, setDemoMode] = useState(false);       // static host: sample data, no scanning
   const [demoModal, setDemoModal] = useState(false);     // the run-it-locally explainer
   const demoRevealSeen = useRef(false);
+  // overnight
+  const [view, setView] = useState('report');            // report | inbox | tasks
+  const [tasks, setTasks] = useState([]);
+  const [inbox, setInbox] = useState([]);
+  const [ledger, setLedger] = useState({ totalHours: 0, events: [] });
+  const [watchOn, setWatchOn] = useState(false);
+  const [armMap, setArmMap] = useState({});               // findingId -> {taskId|pending|error}
+  const [autoOffer, setAutoOffer] = useState(null);       // {taskId, title, approvals}
   const [consentOpen, setConsentOpen] = useState(false); // the gate: every scan starts here
   const [scanRoots, setScanRoots] = useState([]);        // display strings for the scanning sub-line
   const [scanShell, setScanShell] = useState(false);     // shell history included in the running scan
@@ -1630,6 +1793,86 @@ function App() {
     }
   }, [demoMode, autoMap]);
 
+  /* ---- overnight: loaders + actions (never in demo) ---- */
+  const loadOvernight = useCallback(async () => {
+    if (demoMode) return;
+    try {
+      const [t, i, l] = await Promise.all([
+        fetchJSON('/api/tasks'), fetchJSON('/api/inbox'), fetchJSON('/api/ledger'),
+      ]);
+      if (t.ok && t.body) { setTasks(t.body.tasks || []); setWatchOn(!!t.body.watch); }
+      if (i.ok && i.body) setInbox(i.body.items || []);
+      if (l.ok && l.body) setLedger(l.body);
+      if (t.ok && t.body) {
+        const map = {};
+        (t.body.tasks || []).forEach(x => { map[x.findingId] = { taskId: x.id }; });
+        setArmMap(map);
+      }
+    } catch (e) { /* server gone — views show what they have */ }
+  }, [demoMode]);
+
+  useEffect(() => {
+    if (phase === 'report' && !demoMode) loadOvernight();
+  }, [phase, view, demoMode, loadOvernight]); // view: entering Inbox/Tasks refetches
+
+  // Schedules are inferred from what the finding IS; editable later in Tasks.
+  const inferSchedule = f => {
+    const k = (f.automation && f.automation.kind) || '';
+    if (k === 'recurring-draft' || k === 'report-assembler') return { type: 'weekly', dow: 1, hour: 7 };
+    if (k === 'file-organizer') return { type: 'interval', days: 7 };
+    return { type: 'manual' };
+  };
+
+  const armFinding = useCallback(async finding => {
+    if (demoMode) { setDemoModal(true); return; }
+    setArmMap(m => ({ ...m, [finding.id]: { pending: true } }));
+    try {
+      const r = await fetchJSON('/api/tasks', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ findingId: finding.id, schedule: inferSchedule(finding) }),
+      });
+      if (!r.ok) throw new Error((r.body && r.body.error) || ('server answered ' + r.status));
+      setArmMap(m => ({ ...m, [finding.id]: { taskId: r.body.task.id } }));
+      loadOvernight();
+    } catch (e) {
+      setArmMap(m => ({ ...m, [finding.id]: { error: e.message } }));
+    }
+  }, [demoMode, loadOvernight]);
+
+  const inboxAct = useCallback(async (item, action) => {
+    try {
+      const r = await fetchJSON('/api/inbox', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId: item.id, action }),
+      });
+      if (r.ok && r.body) {
+        if (r.body.offerAuto) {
+          const t = tasks.find(x => x.id === item.taskId);
+          setAutoOffer({ taskId: item.taskId, title: item.title, approvals: ((t && t.approvals) || 2) + 1 });
+        }
+      }
+    } catch (e) { /* reload below tells the truth either way */ }
+    loadOvernight();
+  }, [tasks, loadOvernight]);
+
+  const taskAct = useCallback(async (task, action) => {
+    try {
+      await fetchJSON('/api/tasks', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: task.id, action }),
+      });
+    } catch (e) { /* reload shows reality */ }
+    if (action === 'run-now') setView('inbox');
+    setTimeout(loadOvernight, action === 'run-now' ? 1200 : 0);
+  }, [loadOvernight]);
+
+  const autoDecide = useCallback(async (offer, goAuto) => {
+    setAutoOffer(null);
+    if (goAuto) {
+      await taskAct({ id: offer.taskId }, 'autonomy-auto');
+    }
+  }, [taskAct]);
+
   const viewBrief = useCallback(async finding => {
     const st = autoMap[finding.id] || {};
     let brief = st.brief;
@@ -1807,13 +2050,27 @@ function App() {
           value={score.value != null ? score.value : null}
           hours={score.recoverableHoursPerWeek || 0}
         />
+        {!demoMode ? (
+          <nav className="tabs" aria-label="Views">
+            <button className={'tab' + (view === 'report' ? ' on' : '')} onClick={() => setView('report')}>Report</button>
+            <button className={'tab' + (view === 'inbox' ? ' on' : '')} onClick={() => setView('inbox')}>
+              Inbox{inbox.filter(i => i.status === 'awaiting').length ? <span className="n"> · {inbox.filter(i => i.status === 'awaiting').length}</span> : null}
+            </button>
+            <button className={'tab' + (view === 'tasks' ? ' on' : '')} onClick={() => setView('tasks')}>Tasks{tasks.length ? <span className="n"> · {tasks.length}</span> : null}</button>
+          </nav>
+        ) : null}
         <span className="topbar-spacer"></span>
+        {ledger.totalHours > 0 ? <span className="ratchet">worked {ledger.totalHours} h for you</span> : null}
         <button className="btn btn-ghost" onClick={rescan}>{demoMode ? 'Read my machine' : 'Rescan'}</button>
         {!demoMode ? <button className="btn btn-ghost" onClick={() => setConsentOpen(true)}>Folders</button> : null}
         {!empty ? <button className="btn btn-ghost" onClick={() => setShareOpen(true)}>Share card</button> : null}
       </header>
 
-      {empty ? (
+      {view === 'inbox' && !demoMode ? (
+        <InboxView items={inbox} onAct={inboxAct} autoOffer={autoOffer} onAutoDecide={autoDecide} watchOn={watchOn} tasksCount={tasks.length} />
+      ) : view === 'tasks' && !demoMode ? (
+        <TasksView tasks={tasks} onAct={taskAct} watchOn={watchOn} />
+      ) : empty ? (
         <main className="state-card">
           <h1 className="state-title">Clean read.</h1>
           <p className="state-body">Either you're already leveraged — or point me at more roots.</p>
@@ -1851,6 +2108,8 @@ function App() {
                   onAutomate={automate}
                   onViewBrief={viewBrief}
                   onSetStatus={setFindingStatus}
+                  onArm={armFinding}
+                  armState={armMap[f.id]}
                 />
               ))}
             </React.Fragment>
