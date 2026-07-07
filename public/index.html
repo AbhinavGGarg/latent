@@ -1534,16 +1534,17 @@ function TasksView({ tasks, onAct, watchOn, agentEnv, onChoose }) {
 /* Which agent is this command for? Static label when one is installed, a small
    switcher when several are, an honest 'none' otherwise. Answers 'how do I know
    which agent I have' and 'what if I have multiple' in one control. */
+function shq(x) { return "'" + String(x).replace(/'/g, "'\\''") + "'"; }
 function liveRunLine(briefModal, env) {
   if (!briefModal || !briefModal.dir) return briefModal ? briefModal.runLine : '';
   const dir = briefModal.dir;
-  const LINES = {
-    claude: 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
-    codex: 'cd ' + dir + ' && codex exec "$(cat BRIEF.md)"',
-    gemini: 'cd ' + dir + ' && gemini -p "$(cat BRIEF.md)"',
-  };
-  const pref = env && env.preferred;
-  return LINES[pref] || LINES.claude;
+  const pref = (env && env.preferred) || 'claude';
+  const bins = (env && env.bins) || {};
+  // Absolute path to the binary when we resolved it — this is what makes the
+  // command work in a terminal whose PATH lacks ~/.local/bin, Homebrew, etc.
+  const bin = bins[pref] || pref;
+  const verb = pref === 'codex' ? ' exec ' : ' -p ';
+  return 'cd ' + shq(dir) + ' && ' + shq(bin) + verb + '"$(cat BRIEF.md)"';
 }
 
 function AgentPicker({ env, onChoose }) {
@@ -1975,11 +1976,9 @@ function App() {
     const dir = String(briefPath).replace(/\/?BRIEF\.md$/, '');
     // Latent is a dispatcher: the run command adapts to whichever agent CLI this
     // machine has. None found -> no fake command; the brief itself is the artifact.
-    const RUN_LINES = {
-      claude: 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
-      codex: 'cd ' + dir + ' && codex exec "$(cat BRIEF.md)"',
-      gemini: 'cd ' + dir + ' && gemini -p "$(cat BRIEF.md)"',
-    };
+    const bins = (agentEnv && agentEnv.bins) || {};
+    const line = (id) => 'cd ' + shq(dir) + ' && ' + shq(bins[id] || id) + (id === 'codex' ? ' exec ' : ' -p ') + '"$(cat BRIEF.md)"';
+    const RUN_LINES = { claude: line('claude'), codex: line('codex'), gemini: line('gemini') };
     const preferred = agentEnv && agentEnv.preferred;
     setBriefModal({
       title: finding.title,
@@ -2248,6 +2247,9 @@ function App() {
                 <div className="brief-footer-row">
                   <AgentPicker env={agentEnv} onChoose={chooseRunner} />
                 </div>
+              ) : null}
+              {!briefModal.demo ? (
+                <span className="report-sub">Open a new terminal tab (⌘T) — this one is running Latent — and paste:</span>
               ) : null}
               <div className="brief-footer-row">
                 {briefModal.demo ? <span className="report-sub">Get your own briefs:</span> : null}
