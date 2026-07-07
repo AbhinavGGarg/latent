@@ -266,6 +266,16 @@ Run it: \`${run}\`
       runLine: (dir, bin) => 'cd ' + shq(dir) + ' && ' + shq(bin || 'codex') + ' exec "$(cat BRIEF.md)"' },
     { id: 'gemini', bin: 'gemini', flag: '-p', args: (brief) => ['-p', brief],
       runLine: (dir, bin) => 'cd ' + shq(dir) + ' && ' + shq(bin || 'gemini') + ' -p "$(cat BRIEF.md)"' },
+    // Best-effort headless invocations for more agent CLIs. These flags reflect
+    // each tool's documented non-interactive/print mode, but the exact contract
+    // varies by version and may need tuning per tool — Latent is a dispatcher, so
+    // detection is optimistic and the run line stays copy-pasteable either way.
+    { id: 'cursor-agent', bin: 'cursor-agent', flag: '-p', args: (brief) => ['-p', brief],
+      runLine: (dir, bin) => 'cd ' + shq(dir) + ' && ' + shq(bin || 'cursor-agent') + ' -p "$(cat BRIEF.md)"' },
+    { id: 'opencode', bin: 'opencode', flag: 'run', args: (brief) => ['run', brief],
+      runLine: (dir, bin) => 'cd ' + shq(dir) + ' && ' + shq(bin || 'opencode') + ' run "$(cat BRIEF.md)"' },
+    { id: 'aider', bin: 'aider', flag: '--message', args: (brief) => ['--message', brief, '--yes'],
+      runLine: (dir, bin) => 'cd ' + shq(dir) + ' && ' + shq(bin || 'aider') + ' --message "$(cat BRIEF.md)" --yes' },
   ];
   // Common install locations, checked in addition to PATH — because a process
   // spawned by npx/a GUI often gets a stripped PATH that omits ~/.local/bin,
@@ -422,6 +432,109 @@ Run it: \`${run}\`
     return Math.min(Math.max(Math.round(h * 100) / 100, 0.05), 3);
   }
 
+  // ---- shared executor: one run dir -> spawn the agent -> collect artifacts ----
+  // The single place that turns a BRIEF into a finished (or failed) draft. Both
+  // the overnight runTask and the interactive POST /api/run go through this so the
+  // spawn/auth/artifact logic lives once. It knows nothing about tasks, the inbox,
+  // or the ledger — the callers own that bookkeeping around the returned result.
+  // Returns { status:'done'|'failed', files:[relpaths under out/], receipt, reason, runner:id|null }.
+  async function executeBrief({ runDir, briefText }) {
+    const outDir = path.join(runDir, 'out');
+    const result = { status: 'awaiting', files: [], receipt: '', reason: null, runner: null };
+    await fsp.mkdir(outDir, { recursive: true });
+    await fsp.writeFile(path.join(runDir, 'BRIEF.md'), briefText);
+    await writePlaybookSettings(runDir);
+
+    const cp = await import('node:child_process');
+    const detected = await detectRunners(false);
+    const runner = runnerById(detected.preferred);
+    const resolvedBin = detected.detected.find((x) => x.id === detected.preferred);
+    if (!runner || !resolvedBin) {
+      result.status = 'failed';
+      result.reason = 'no agent CLI found (looked for claude, codex, gemini, cursor-agent, opencode, aider ' +
+        'on PATH and in the usual install locations). Install one, or run the brief yourself: copy ' + path.join(runDir, 'BRIEF.md') +
+        ' into any AI assistant.';
+      return result;
+    }
+    result.runner = runner.id;
+
+    await new Promise((resolve) => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; resolve(); } };
+      let child;
+      try {
+        child = cp.spawn(resolvedBin.bin, runner.args(briefText), {
+          cwd: runDir, stdio: ['ignore', 'pipe', 'pipe'],
+          env: Object.assign({}, process.env, { PATH: detected.path }),
+        });
+      } catch (e) {
+        result.status = 'failed';
+        result.reason = 'could not start the agent (' + (e.message || e) + ')';
+        return done();
+      }
+      let outTail = '';
+      const cap = (b) => { outTail = (outTail + b.toString()).slice(-800); };
+      child.stderr.on('data', cap);
+      child.stdout.on('data', cap);
+      const timer = setTimeout(() => {
+        result.status = 'failed';
+        result.reason = 'the run hit the 15-minute cap and was stopped';
+        try { child.kill('SIGKILL'); } catch (e) {}
+        done();
+      }, 15 * 60 * 1000);
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        result.status = 'failed';
+        result.reason = e.code === 'ENOENT'
+          ? 'the agent CLI vanished from PATH mid-run — restart the watcher'
+          : ('agent error: ' + (e.message || e));
+        done();
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        if (result.status === 'awaiting' && code !== 0) {
+          result.status = 'failed';
+          const low = outTail.toLowerCase();
+          if (low.includes('not logged in') || low.includes('/login') || low.includes('authentication') || low.includes('unauthorized')) {
+            const name = runner.id === 'claude' ? 'Claude Code' : runner.id;
+            result.reason = name + ' is installed but not logged in for headless use. Open a terminal, run ' +
+              shq(resolvedBin.bin) + ' once and log in (Claude: type /login), then this will work. ' +
+              'Or set ANTHROPIC_API_KEY. Then rerun: ' + runner.runLine(runDir, resolvedBin.bin);
+          } else {
+            result.reason = 'agent exited ' + code + (outTail ? ' — ' + outTail.trim().slice(-220) : '') +
+              '. Run it yourself: ' + runner.runLine(runDir, resolvedBin.bin);
+          }
+        }
+        done();
+      });
+    });
+
+    // collect artifacts + receipt regardless; a failed run may still leave clues
+    try {
+      const walk = async (dir, base) => {
+        const out = [];
+        for (const ent of await fsp.readdir(dir, { withFileTypes: true })) {
+          const full = path.join(dir, ent.name);
+          const rel = path.join(base, ent.name);
+          if (ent.isDirectory()) out.push(...await walk(full, rel));
+          else out.push(rel);
+        }
+        return out;
+      };
+      result.files = await walk(outDir, '');
+    } catch (e) { /* no out dir — fine */ }
+    try {
+      result.receipt = String(await fsp.readFile(path.join(outDir, 'RECEIPT.md'), 'utf8')).slice(0, 4000);
+    } catch (e) { /* no receipt left */ }
+    if (result.status === 'awaiting' && result.files.length === 0) {
+      result.status = 'failed';
+      result.reason = result.reason || 'the run produced no artifacts';
+    }
+    // Success is anything that got past the spawn without failing: mark it done.
+    if (result.status === 'awaiting') result.status = 'done';
+    return result;
+  }
+
   // ---- runner: one task -> one run dir -> one inbox item ----
   const runningTasks = new Set();
   async function runTask(task) {
@@ -437,7 +550,8 @@ Run it: \`${run}\`
       hoursCredit: creditFor(task),
     };
     try {
-      await fsp.mkdir(outDir, { recursive: true });
+      // Resolve the preferred runner up front so the brief carries the exact run
+      // command (same absolute-path line executeBrief will spawn).
       const envr0 = await detectRunners(false);
       const rr0 = runnerById(envr0.preferred);
       const rbin0 = envr0.detected.find((x) => x.id === envr0.preferred);
@@ -447,92 +561,13 @@ Run it: \`${run}\`
         { generatedAt: new Date(startedAt).toISOString() },
         runDir, runLine0
       );
-      await fsp.writeFile(path.join(runDir, 'BRIEF.md'), brief);
-      await writePlaybookSettings(runDir);
 
-      const cp = await import('node:child_process');
-      const detected = await detectRunners(false);
-      const runner = runnerById(detected.preferred);
-      const resolvedBin = detected.detected.find((x) => x.id === detected.preferred);
-      if (!runner || !resolvedBin) {
-        item.status = 'failed';
-        item.reason = 'no agent CLI found (looked for claude, codex, gemini on PATH and in the usual ' +
-          'install locations). Install one, or run the brief yourself: copy ' + path.join(runDir, 'BRIEF.md') +
-          ' into any AI assistant.';
-        throw Object.assign(new Error('no runner'), { handled: true });
-      }
-      await new Promise((resolve) => {
-        let settled = false;
-        const done = () => { if (!settled) { settled = true; resolve(); } };
-        let child;
-        try {
-          child = cp.spawn(resolvedBin.bin, runner.args(brief), {
-            cwd: runDir, stdio: ['ignore', 'pipe', 'pipe'],
-            env: Object.assign({}, process.env, { PATH: detected.path }),
-          });
-        } catch (e) {
-          item.status = 'failed';
-          item.reason = 'could not start the agent (' + (e.message || e) + ')';
-          return done();
-        }
-        let outTail = '';
-        const cap = (b) => { outTail = (outTail + b.toString()).slice(-800); };
-        child.stderr.on('data', cap);
-        child.stdout.on('data', cap);
-        const timer = setTimeout(() => {
-          item.status = 'failed';
-          item.reason = 'the run hit the 15-minute cap and was stopped';
-          try { child.kill('SIGKILL'); } catch (e) {}
-          done();
-        }, 15 * 60 * 1000);
-        child.on('error', (e) => {
-          clearTimeout(timer);
-          item.status = 'failed';
-          item.reason = e.code === 'ENOENT'
-            ? 'the agent CLI vanished from PATH mid-run — restart the watcher'
-            : ('agent error: ' + (e.message || e));
-          done();
-        });
-        child.on('close', (code) => {
-          clearTimeout(timer);
-          if (item.status === 'awaiting' && code !== 0) {
-            item.status = 'failed';
-            const low = outTail.toLowerCase();
-            if (low.includes('not logged in') || low.includes('/login') || low.includes('authentication') || low.includes('unauthorized')) {
-              const name = runner.id === 'claude' ? 'Claude Code' : runner.id;
-              item.reason = name + ' is installed but not logged in for headless use. Open a terminal, run ' +
-                shq(resolvedBin.bin) + ' once and log in (Claude: type /login), then this will work. ' +
-                'Or set ANTHROPIC_API_KEY. Then rerun: ' + runner.runLine(runDir, resolvedBin.bin);
-            } else {
-              item.reason = 'agent exited ' + code + (outTail ? ' — ' + outTail.trim().slice(-220) : '') +
-                '. Run it yourself: ' + runner.runLine(runDir, resolvedBin.bin);
-            }
-          }
-          done();
-        });
-      });
-
-      // collect artifacts + receipt regardless; a failed run may still leave clues
-      try {
-        const walk = async (dir, base) => {
-          const out = [];
-          for (const ent of await fsp.readdir(dir, { withFileTypes: true })) {
-            const full = path.join(dir, ent.name);
-            const rel = path.join(base, ent.name);
-            if (ent.isDirectory()) out.push(...await walk(full, rel));
-            else out.push(rel);
-          }
-          return out;
-        };
-        item.files = await walk(outDir, '');
-      } catch (e) { /* no out dir — fine */ }
-      try {
-        item.receipt = String(await fsp.readFile(path.join(outDir, 'RECEIPT.md'), 'utf8')).slice(0, 4000);
-      } catch (e) { /* no receipt left */ }
-      if (item.status === 'awaiting' && item.files.length === 0) {
-        item.status = 'failed';
-        item.reason = item.reason || 'the run produced no artifacts';
-      }
+      const outcome = await executeBrief({ runDir, briefText: brief });
+      item.files = outcome.files;
+      item.receipt = outcome.receipt;
+      // done -> the inbox's 'awaiting you' state; failed carries executeBrief's reason.
+      if (outcome.status === 'failed') { item.status = 'failed'; item.reason = outcome.reason; }
+      else { item.status = 'awaiting'; }
 
       // auto-approved tasks credit the ledger immediately — but stay visible
       if (item.status === 'awaiting' && task.autonomy === 'auto') {
@@ -540,10 +575,8 @@ Run it: \`${run}\`
         await creditLedger(task.title, item.hoursCredit);
       }
     } catch (e) {
-      if (!(e && e.handled)) {
-        item.status = 'failed';
-        item.reason = 'runner error: ' + (e.message || e);
-      }
+      item.status = 'failed';
+      item.reason = 'runner error: ' + (e.message || e);
     } finally {
       runningTasks.delete(task.id);
     }
@@ -573,6 +606,88 @@ Run it: \`${run}\`
       ledger.events = ledger.events.slice(0, 100);
       await writeFileAtomic(LEDGER_PATH, JSON.stringify(ledger, null, 2));
     });
+  }
+
+  // ==========================================================================
+  // INTERACTIVE RUN — the "Run it" button. One finding -> executeBrief on the
+  // server -> a live in-memory record the frontend polls until it goes terminal.
+  // No inbox/ledger/tasks: this is a one-shot draft the user watches inline.
+  // ==========================================================================
+  const interactiveRuns = new Map();          // runId -> {status:'running'|...} | full result
+  const interactiveByFinding = new Map();     // findingId -> runId, only while running (single-flight)
+
+  async function apiPostRun(req, res) {
+    const raw = await readBody(req);
+    let body;
+    try { body = raw.trim() ? JSON.parse(raw) : {}; } catch (_e) {
+      return sendJSON(res, 400, { error: 'invalid JSON body' });
+    }
+    const findingId = body && body.findingId;
+    if (typeof findingId !== 'string' || !findingId) {
+      return sendJSON(res, 400, { error: 'findingId required' });
+    }
+    // finding.id becomes a path segment under playbooks/ — refuse anything
+    // path-shaped before it is ever used (no traversal into PLAYBOOKS_DIR).
+    if (!SAFE_ID.test(findingId)) {
+      return sendJSON(res, 400, { error: 'findingId contains unsafe characters' });
+    }
+    // Single-flight: a run already in flight for this finding is returned as-is so
+    // a double-click never spawns two agents against the same brief.
+    const existing = interactiveByFinding.get(findingId);
+    if (existing && interactiveRuns.get(existing) && interactiveRuns.get(existing).status === 'running') {
+      return sendJSON(res, 202, { runId: existing });
+    }
+
+    let scan;
+    try {
+      scan = JSON.parse(await fsp.readFile(SCAN_PATH, 'utf8'));
+    } catch (err) {
+      if (err.code === 'ENOENT') return sendJSON(res, 404, { error: 'no scan yet' });
+      return sendJSON(res, 500, { error: 'scan.json is unreadable' });
+    }
+    const finding = (scan.findings || []).find((f) => f.id === findingId);
+    if (!finding) return sendJSON(res, 404, { error: 'unknown finding id' });
+
+    const runId = newId('run');
+    const startedAt = Date.now();
+    const runDir = path.join(PLAYBOOKS_DIR, finding.id, 'interactive-' + startedAt);
+    // Resolve the preferred runner + run line the same way apiPostAutomate does,
+    // so the brief carries the exact absolute-path command.
+    const envr = await detectRunners(false);
+    const rr = runnerById(envr.preferred);
+    const rbin = envr.detected.find((x) => x.id === envr.preferred);
+    const runLine = rr ? rr.runLine(runDir, rbin && rbin.bin) : null;
+    const briefText = renderBrief(finding, scan, runDir, runLine);
+
+    interactiveRuns.set(runId, { status: 'running', findingId, startedAt: new Date(startedAt).toISOString() });
+    interactiveByFinding.set(findingId, runId);
+
+    // Fire and forget: executeBrief runs off the handler; the record is replaced
+    // with the terminal result when it resolves. Poll GET /api/run?id= for it.
+    (async () => {
+      let outcome;
+      try {
+        outcome = await executeBrief({ runDir, briefText });
+      } catch (e) {
+        outcome = { status: 'failed', files: [], receipt: '', reason: 'runner error: ' + (e.message || e), runner: null };
+      }
+      interactiveRuns.set(runId, Object.assign({}, outcome, {
+        done: true, findingId, runDir, runLine,
+        startedAt: new Date(startedAt).toISOString(),
+        finishedAt: new Date().toISOString(),
+      }));
+      if (interactiveByFinding.get(findingId) === runId) interactiveByFinding.delete(findingId);
+    })();
+
+    sendJSON(res, 202, { runId });
+  }
+
+  function apiGetRun(req, res, u) {
+    const id = u.searchParams.get('id');
+    if (!id) return sendJSON(res, 400, { error: 'id required' });
+    const rec = interactiveRuns.get(id);
+    if (!rec) return sendJSON(res, 404, { error: 'unknown run id' });
+    sendJSON(res, 200, rec);
   }
 
   // ---- scheduler: only in watch mode; ticks every 60s; loud, never silent ----
@@ -958,6 +1073,11 @@ Run it: \`${run}\`
     }
     if (p === '/api/automate') {
       if (req.method === 'POST') return apiPostAutomate(req, res);
+      return sendJSON(res, 405, { error: 'method not allowed' });
+    }
+    if (p === '/api/run') {
+      if (req.method === 'POST') return apiPostRun(req, res);
+      if (req.method === 'GET') return apiGetRun(req, res, u);
       return sendJSON(res, 405, { error: 'method not allowed' });
     }
     if (p === '/api/brief') {

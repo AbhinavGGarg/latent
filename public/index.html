@@ -383,6 +383,22 @@ button { font: inherit; color: inherit; }
 .card-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .card-error { font: 400 12.5px var(--font-mono); color: var(--ash); }
 
+/* Run it — the primary server-side action. Running = a calm mono ellipsis
+   (no spinner gif). Done reuses .chip-cold (glacier). */
+.run-line-under { font: 400 12px var(--font-mono); color: var(--ash); letter-spacing: .03em; }
+.run-running { display: inline-flex; align-items: center; gap: 8px; font: 500 13px var(--font-mono); color: var(--bone); }
+.run-ellipsis { display: inline-block; width: 1.4em; color: var(--ember); letter-spacing: .12em; }
+.run-ellipsis::after { content: ""; animation: runDots 1.4s steps(4, end) infinite; }
+@keyframes runDots { 0% { content: ""; } 25% { content: "·"; } 50% { content: "··"; } 75%, 100% { content: "···"; } }
+.run-files { font: 400 12.5px/1.8 var(--font-mono); color: var(--ash); margin: 4px 0 2px; overflow-wrap: anywhere; }
+.run-files .rf-name { color: var(--bone); }
+.run-file-body { font: 400 12px/1.7 var(--font-mono); color: var(--bone); white-space: pre-wrap; background: var(--carbon); border: 1px solid var(--seam); border-radius: 8px; padding: 12px 14px; max-height: 320px; overflow: auto; overflow-wrap: anywhere; }
+.run-file-h { font: 500 11px var(--font-mono); letter-spacing: .12em; color: var(--ash); text-transform: uppercase; margin: 16px 0 6px; }
+.run-file-h:first-child { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .run-ellipsis::after { content: "···"; animation: none; }
+}
+
 /* cold rows — handled receipts, collapsed and sunk below the active list */
 .cold-head {
   font: 500 11px var(--font-mono); letter-spacing: 0.14em;
@@ -1306,13 +1322,20 @@ function ConsentModal({ storedRoots, storedShell, onClose, onStart }) {
 }
 
 /* ---------- receipt card ---------- */
-function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, onViewBrief, onSetStatus, onArm, armState }) {
+function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, onViewBrief, onSetStatus, onArm, armState, runState, onRun, onViewRun, agentEnv, demoMode }) {
   const m = finding.metrics || {};
   const est = m.estHoursPerWeek || 0;
   const pct = Math.max(4, Math.min(100, (est / (maxEst || 1)) * 100));
   const evidence = finding.evidence || [];
   const shown = evidence.slice(0, 4);
   const status = autoState.status;
+  // Run it (server-side). Only offered in REAL mode; demo routes clicks to the
+  // run-locally explainer. When no agent is detected the button becomes an honest
+  // "set one up" that opens the brief fallback instead of POSTing a doomed run.
+  const rs = runState || {};
+  const agentDetected = !!(agentEnv && agentEnv.preferred);
+  const activeAgent = agentDetected ? agentName(agentEnv.preferred) : null;
+  const runDrafting = status === 'drafting'; // a client-side demo draft is mid-flight
   return (
     <article
       className={'card' + (stagger ? ' stagger' : '')}
@@ -1346,16 +1369,47 @@ function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, o
       </div>
 
       <div className="card-actions">
-        {status === 'briefed' ? (
+        {/* ---- PRIMARY: Run it (server-side) ---- */}
+        {demoMode ? (
+          // Demo: Run it opens the run-locally explainer; the client-side draft
+          // loop ("Draft the automation") stays available in the secondary row.
+          <button className="btn btn-primary" onClick={() => onRun(finding)}>Run it</button>
+        ) : rs.status === 'running' ? (
+          <span className="run-running" aria-live="polite">
+            Running {rs.runner ? agentName(rs.runner) : (activeAgent || 'agent')}
+            <span className="run-ellipsis" aria-hidden="true"></span>
+          </span>
+        ) : rs.status === 'done' ? (
           <React.Fragment>
-            <span className="chip-cold">Brief ready</span>
-            <button className="btn-text" onClick={() => onViewBrief(finding)}>View brief</button>
+            <span className="chip-cold">Done</span>
+            {rs.files && rs.files.length ? (
+              <span className="run-files">{rs.files.slice(0, 4).map(f => 'out/' + f).join(' · ')}{rs.files.length > 4 ? ' · +' + (rs.files.length - 4) + ' more' : ''}</span>
+            ) : null}
+            <button className="btn-text" onClick={() => onViewRun(finding)}>View result</button>
+            <button className="btn-text quiet" onClick={() => onRun(finding)}>Run again</button>
           </React.Fragment>
-        ) : status === 'drafting' ? (
-          <button className="btn btn-ghost" disabled>Drafting…</button>
+        ) : rs.status === 'failed' ? (
+          <React.Fragment>
+            <button className="btn btn-ghost" onClick={() => onRun(finding)}>Try again</button>
+            <button className="btn-text quiet" onClick={() => onViewBrief(finding)}>run it manually</button>
+          </React.Fragment>
+        ) : !agentDetected ? (
+          // No agent on this machine: don't POST a doomed run — send them to the
+          // brief fallback (copy-the-brief) instead. Honest, non-blocking.
+          <button className="btn btn-ghost" onClick={() => onViewBrief(finding)}>No agent detected — set one up</button>
         ) : (
-          <button className="btn btn-ghost" onClick={() => onAutomate(finding)}>Draft the automation</button>
+          <React.Fragment>
+            <button className="btn btn-primary" onClick={() => onRun(finding)}>Run it</button>
+            {activeAgent ? <span className="run-line-under">via {activeAgent}</span> : null}
+          </React.Fragment>
         )}
+
+        {/* Failed run: surface executeBrief's reason verbatim (login/no-agent guidance). */}
+        {!demoMode && rs.status === 'failed' && rs.reason ? (
+          <span className="card-error">{rs.reason}</span>
+        ) : null}
+
+        {/* ---- SECONDARY: arm for overnight ---- */}
         {onArm ? (
           armState && armState.taskId ? (
             <span className="chip-cold">Armed</span>
@@ -1368,7 +1422,27 @@ function ReceiptCard({ finding, index, maxEst, stagger, autoState, onAutomate, o
         {armState && armState.error ? (
           <span className="card-error">Arming failed — {armState.error}.</span>
         ) : null}
-        {status !== 'drafting' ? (
+
+        {/* ---- SECONDARY: draft-only / brief. In demo this is the loop; in real
+             mode it's the "or run it yourself" disclosure (keeps the brief modal
+             reachable via a small link). ---- */}
+        {demoMode ? (
+          status === 'briefed' ? (
+            <React.Fragment>
+              <span className="chip-cold">Brief ready</span>
+              <button className="btn-text" onClick={() => onViewBrief(finding)}>View brief</button>
+            </React.Fragment>
+          ) : runDrafting ? (
+            <button className="btn btn-ghost" disabled>Drafting…</button>
+          ) : (
+            <button className="btn btn-ghost" onClick={() => onAutomate(finding)}>Draft the automation</button>
+          )
+        ) : rs.status === 'failed' ? null /* the manual link already shows above */ : (
+          <button className="btn-text quiet" onClick={() => onViewBrief(finding)}>run it manually</button>
+        )}
+
+        {/* ---- SECONDARY: mark automated / dismiss ---- */}
+        {!runDrafting ? (
           <React.Fragment>
             <button className="btn-text quiet" disabled={autoState.statusPending}
                     onClick={() => onSetStatus(finding, 'automated')}>Mark automated</button>
@@ -1535,6 +1609,19 @@ function TasksView({ tasks, onAct, watchOn, agentEnv, onChoose }) {
    switcher when several are, an honest 'none' otherwise. Answers 'how do I know
    which agent I have' and 'what if I have multiple' in one control. */
 function shq(x) { return "'" + String(x).replace(/'/g, "'\\''") + "'"; }
+/* The non-interactive verb each agent CLI takes before "$(cat BRIEF.md)".
+   Mirrors server.js RUNNERS: default '-p', codex 'exec', opencode 'run',
+   aider '--message'. cursor-agent uses '-p'. Kept in sync so liveRunLine and
+   the brief modal cover every id the server can detect. */
+const RUNNER_VERBS = { codex: ' exec ', opencode: ' run ', aider: ' --message ' };
+function runVerb(id) { return RUNNER_VERBS[id] || ' -p '; }
+/* aider needs a trailing --yes to run non-interactively; other CLIs take none. */
+function runTail(id) { return id === 'aider' ? ' --yes' : ''; }
+const RUNNER_NAMES = {
+  claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini',
+  'cursor-agent': 'Cursor', opencode: 'opencode', aider: 'Aider',
+};
+function agentName(id) { return RUNNER_NAMES[id] || id; }
 function liveRunLine(briefModal, env) {
   if (!briefModal || !briefModal.dir) return briefModal ? briefModal.runLine : '';
   const dir = briefModal.dir;
@@ -1543,18 +1630,16 @@ function liveRunLine(briefModal, env) {
   // Absolute path to the binary when we resolved it — this is what makes the
   // command work in a terminal whose PATH lacks ~/.local/bin, Homebrew, etc.
   const bin = bins[pref] || pref;
-  const verb = pref === 'codex' ? ' exec ' : ' -p ';
-  return 'cd ' + shq(dir) + ' && ' + shq(bin) + verb + '"$(cat BRIEF.md)"';
+  return 'cd ' + shq(dir) + ' && ' + shq(bin) + runVerb(pref) + '"$(cat BRIEF.md)"' + runTail(pref);
 }
 
 function AgentPicker({ env, onChoose }) {
   const runners = (env && env.runners) || [];
-  const RUNNER_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' };
   if (!runners.length) {
     return <span className="agent-tag agent-none">No agent detected</span>;
   }
   if (runners.length === 1) {
-    return <span className="agent-tag">Agent: {RUNNER_NAMES[runners[0]] || runners[0]}</span>;
+    return <span className="agent-tag">Agent: {agentName(runners[0])}</span>;
   }
   return (
     <span className="agent-pick">
@@ -1565,7 +1650,7 @@ function AgentPicker({ env, onChoose }) {
           className={'agent-opt' + (env.preferred === id ? ' on' : '')}
           aria-pressed={env.preferred === id}
           onClick={() => onChoose(id)}
-        >{RUNNER_NAMES[id] || id}</button>
+        >{agentName(id)}</button>
       ))}
     </span>
   );
@@ -1593,6 +1678,9 @@ function App() {
   const [watchOn, setWatchOn] = useState(false);
   const [armMap, setArmMap] = useState({});               // findingId -> {taskId|pending|error}
   const [autoOffer, setAutoOffer] = useState(null);       // {taskId, title, approvals}
+  const [runMap, setRunMap] = useState({});               // findingId -> {status:'running'|'done'|'failed', runId, files, receipt, reason, runLine, runner}
+  const [runResult, setRunResult] = useState(null);       // the "View result" modal payload
+  const runPollRef = useRef({});                          // findingId -> interval id (poll GET /api/run)
   const [agentEnv, setAgentEnv] = useState(null);          // {runners:[], preferred:string|null}
   const [consentOpen, setConsentOpen] = useState(false); // the gate: every scan starts here
   const [scanRoots, setScanRoots] = useState([]);        // display strings for the scanning sub-line
@@ -1810,6 +1898,77 @@ function App() {
     }
   }, [demoMode]);
 
+  /* Run it (server-side). POST /api/run -> 202 {runId}, then poll GET /api/run?id=
+     every 1200ms until the run goes terminal. The record the server returns carries
+     files + receipt + reason, so 'done' and 'failed' render inline with no extra
+     fetch. Demo mode opens the run-locally explainer instead (no execution). */
+  const RUN_POLL_MS = 1200;
+  // viewBrief is declared later in this component; reference it through a ref so
+  // runIt's dependency list never touches it in the temporal dead zone.
+  const viewBriefRef = useRef(null);
+  const runIt = useCallback(async finding => {
+    if (demoMode) { setDemoModal(true); return; }
+    // No agent on this machine: never POST a doomed run — the brief fallback is
+    // the honest path (the card already routes here, this is belt-and-suspenders).
+    if (!agentEnv || !agentEnv.preferred) { if (viewBriefRef.current) viewBriefRef.current(finding); return; }
+    // Clear any finished-run interval before starting a fresh one.
+    if (runPollRef.current[finding.id]) { clearInterval(runPollRef.current[finding.id]); delete runPollRef.current[finding.id]; }
+    setRunMap(m => ({ ...m, [finding.id]: { status: 'running', runId: null } }));
+    let runId;
+    try {
+      const r = await fetchJSON('/api/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ findingId: finding.id }),
+      });
+      if (!(r.status === 202) || !r.body || !r.body.runId) {
+        throw new Error((r.body && r.body.error) || ('server answered ' + r.status));
+      }
+      runId = r.body.runId;
+      setRunMap(m => ({ ...m, [finding.id]: { status: 'running', runId } }));
+    } catch (e) {
+      setRunMap(m => ({ ...m, [finding.id]: { status: 'failed', reason: 'Could not start the run — ' +
+        (e.message || 'the local server did not respond') + '. Check that `node server.js` is running, then try again.' } }));
+      return;
+    }
+    const poll = async () => {
+      let r;
+      try {
+        r = await fetchJSON('/api/run?id=' + encodeURIComponent(runId));
+      } catch (e) {
+        clearInterval(runPollRef.current[finding.id]); delete runPollRef.current[finding.id];
+        setRunMap(m => ({ ...m, [finding.id]: { status: 'failed', runId,
+          reason: 'Lost the local server mid-run. Check that `node server.js` is still running, then try again.' } }));
+        return;
+      }
+      if (!r.ok || !r.body) return; // transient; keep polling
+      const rec = r.body;
+      if (rec.status === 'running') return;
+      // Terminal: stop polling and record the full result (files/receipt/reason).
+      clearInterval(runPollRef.current[finding.id]); delete runPollRef.current[finding.id];
+      setRunMap(m => ({ ...m, [finding.id]: {
+        status: rec.status === 'done' ? 'done' : 'failed',
+        runId, files: rec.files || [], receipt: rec.receipt || '',
+        reason: rec.reason || null, runLine: rec.runLine || null, runner: rec.runner || null,
+      } }));
+    };
+    runPollRef.current[finding.id] = setInterval(poll, RUN_POLL_MS);
+    poll(); // kick immediately so a fast run doesn't wait a full interval
+  }, [demoMode, agentEnv]);
+
+  // Clean up any live run-poll intervals on unmount.
+  useEffect(() => () => {
+    Object.values(runPollRef.current).forEach(iv => clearInterval(iv));
+    runPollRef.current = {};
+  }, []);
+
+  /* "View result": the run record already carries files + receipt, so the modal
+     reads straight from runMap — no fetch. */
+  const viewRun = useCallback(finding => {
+    const rs = runMap[finding.id];
+    if (!rs) return;
+    setRunResult({ title: finding.title, files: rs.files || [], receipt: rs.receipt || '', runLine: rs.runLine || null });
+  }, [runMap]);
+
   /* Score loop: mark a receipt automated/dismissed, or undo back to idle. The
      server recomputes the score; the topbar animates to the returned numbers.
      Demo mode runs the identical math client-side — never POSTs. */
@@ -1977,8 +2136,7 @@ function App() {
     // Latent is a dispatcher: the run command adapts to whichever agent CLI this
     // machine has. None found -> no fake command; the brief itself is the artifact.
     const bins = (agentEnv && agentEnv.bins) || {};
-    const line = (id) => 'cd ' + shq(dir) + ' && ' + shq(bins[id] || id) + (id === 'codex' ? ' exec ' : ' -p ') + '"$(cat BRIEF.md)"';
-    const RUN_LINES = { claude: line('claude'), codex: line('codex'), gemini: line('gemini') };
+    const line = (id) => 'cd ' + shq(dir) + ' && ' + shq(bins[id] || id) + runVerb(id) + '"$(cat BRIEF.md)"' + runTail(id);
     const preferred = agentEnv && agentEnv.preferred;
     setBriefModal({
       title: finding.title,
@@ -1986,11 +2144,13 @@ function App() {
       dir,
       // Detected runner wins; otherwise default to claude so a missed detection
       // never hides a command the user can actually run.
-      runLine: demoMode ? INSTALL_CMD : (RUN_LINES[preferred] || RUN_LINES.claude),
+      runLine: demoMode ? INSTALL_CMD : line(preferred || 'claude'),
       detected: !!preferred,
       demo: demoMode,
     });
   }, [autoMap, demoMode, agentEnv]);
+  // Keep the ref runIt reads in sync with the latest viewBrief (avoids TDZ + stale closures).
+  viewBriefRef.current = viewBrief;
 
   // Share card: draw once fonts are in, so the canvas type matches the page.
   useEffect(() => {
@@ -2200,6 +2360,11 @@ function App() {
                   onSetStatus={setFindingStatus}
                   onArm={armFinding}
                   armState={armMap[f.id]}
+                  runState={runMap[f.id]}
+                  onRun={runIt}
+                  onViewRun={viewRun}
+                  agentEnv={agentEnv}
+                  demoMode={demoMode}
                 />
               ))}
             </React.Fragment>
@@ -2279,6 +2444,41 @@ function App() {
             </div>
           ) : null}
           <pre className="brief-pre">{briefModal.brief}</pre>
+        </Modal>
+      ) : null}
+
+      {runResult ? (
+        <Modal
+          title={runResult.title}
+          onClose={() => setRunResult(null)}
+          footer={
+            runResult.runLine ? (
+              <div className="brief-footer-row">
+                <span className="report-sub">Re-run it yourself:</span>
+                <code className="run-line">{runResult.runLine}</code>
+                <CopyButton text={runResult.runLine} label="Copy run command" />
+              </div>
+            ) : (
+              <span className="report-sub">Drafts written to the run's out/ folder — your originals were never touched.</span>
+            )
+          }
+        >
+          <div className="run-file-h">Files produced · {runResult.files.length}</div>
+          {runResult.files.length ? (
+            <div className="run-files">
+              {runResult.files.map((f, i) => (
+                <div key={i}><span className="rf-name">out/{f}</span></div>
+              ))}
+            </div>
+          ) : (
+            <p className="state-body">No files were written to out/.</p>
+          )}
+          <div className="run-file-h">RECEIPT.md</div>
+          {runResult.receipt ? (
+            <pre className="run-file-body">{runResult.receipt}</pre>
+          ) : (
+            <p className="state-body">The run left no RECEIPT.md.</p>
+          )}
         </Modal>
       ) : null}
 
