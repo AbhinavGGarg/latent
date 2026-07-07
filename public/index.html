@@ -535,7 +535,8 @@ const MAX_RECEIPTS = 12;              // SPEC: cap displayed findings at 12
 const POLL_MS = 400;                  // SPEC: poll /api/progress at 400ms, only while scanning
 const CONSENT_KEY = 'latentConsent';  // {roots:[abs paths], shellHistory:bool, consentedAt: ISO}
 /* Static-host demo (Vercel): no local server -> sample data + run-it-locally CTA. */
-const DEMO_INSTALL = 'npx github:AbhinavGGarg/latent';
+const INSTALL_CMD = 'npx github:AbhinavGGarg/latent'; // flip to 'npx latent-scan' after npm publish
+const DEMO_INSTALL = INSTALL_CMD;
 const DEMO_PLAYBOOKS = '/Users/sam/latent/playbooks/'; // the demo persona's machine
 
 /* Demo briefs are rendered client-side so the loop completes without a server.
@@ -576,7 +577,8 @@ function renderDemoBrief(finding) {
     '\n## Constraints\n' +
     '- Draft only. All output inside ' + dir + '/out/. Do not modify the evidence files.\n' +
     '- Leave a RECEIPT.md: what you read, what you produced.\n' +
-    '\nRun it: `cd ' + dir + ' && claude -p "$(cat BRIEF.md)"`\n';
+    '\n(Sample brief — the paths above belong to the demo. On your machine, Latent\n' +
+    'writes the real file and hands you a run command that points at it.)\n';
 }
 
 /* Client mirror of the server's live-score recompute — same formula as the
@@ -809,7 +811,7 @@ function drawShareCard(canvas, scan) {
   ctx.fillText(receipts + ' receipt' + (receipts === 1 ? '' : 's'), 72 + scoreW + 40, 556);
   ctx.textAlign = 'right';
   ctx.fillStyle = '#EDE6DC';
-  ctx.fillText('npx latent-scan', W - 72, 556);
+  ctx.fillText(INSTALL_CMD, W - 72, 556);
   ctx.textAlign = 'left';
 
   // provenance — the trust line
@@ -1892,12 +1894,13 @@ function App() {
       setAutoMap(m => ({ ...m, [finding.id]: { ...(m[finding.id] || {}), briefError: null } }));
     }
     const briefPath = st.briefPath || (finding.automation && finding.automation.briefPath) || ('playbooks/' + finding.id + '/BRIEF.md');
-    let dir = String(briefPath).replace(/\/?BRIEF\.md$/, '');
-    if (demoMode) dir = homeToTilde(dir); // match the sample brief's own run line
+    const dir = String(briefPath).replace(/\/?BRIEF\.md$/, '');
+    // Demo: never surface a copyable command with a fictional path — the only
+    // command a demo visitor can actually run is the installer.
     setBriefModal({
       title: finding.title,
       brief,
-      runLine: 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
+      runLine: demoMode ? INSTALL_CMD : 'cd ' + dir + ' && claude -p "$(cat BRIEF.md)"',
       demo: demoMode,
     });
   }, [autoMap, demoMode]);
@@ -2153,8 +2156,9 @@ function App() {
           onClose={() => setBriefModal(null)}
           footer={
             <React.Fragment>
+              {briefModal.demo ? <span className="report-sub">Get your own briefs:</span> : null}
               <code className="run-line">{briefModal.runLine}</code>
-              <CopyButton text={briefModal.runLine} label="Copy run command" />
+              <CopyButton text={briefModal.runLine} label={briefModal.demo ? 'Copy install command' : 'Copy run command'} />
             </React.Fragment>
           }
         >
